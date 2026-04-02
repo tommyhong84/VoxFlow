@@ -19,6 +19,9 @@ pub enum AppError {
     #[error("FFmpeg 错误: {0}")]
     FFmpeg(String),
 
+    #[error("音频播放错误: {0}")]
+    Audio(String),
+
     #[error("配置错误: {0}")]
     Config(String),
 

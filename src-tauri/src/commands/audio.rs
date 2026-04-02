@@ -1,4 +1,5 @@
 use std::sync::Mutex;
+use std::sync::mpsc;
 
 use tauri::Emitter;
 use tauri::Manager;
@@ -6,6 +7,148 @@ use tauri::Manager;
 use crate::core::db::Database;
 use crate::core::error::AppError;
 use crate::core::models::MixProgress;
+
+// --- Audio playback via rodio on a dedicated thread ---
+
+use cpal::traits::{DeviceTrait, HostTrait};
+
+const VIRTUAL_KEYWORDS: &[&str] = &[
+    "blackhole", "soundflower", "vb-cable", "cable input",
+    "cable output", "virtual", "loopback",
+];
+
+fn is_virtual_device(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    VIRTUAL_KEYWORDS.iter().any(|kw| lower.contains(kw))
+}
+
+fn find_physical_device() -> Option<cpal::Device> {
+    let host = cpal::default_host();
+    if let Ok(devices) = host.output_devices() {
+        for device in devices {
+            if let Ok(name) = device.name() {
+                if !is_virtual_device(&name) {
+                    return Some(device);
+                }
+            }
+        }
+    }
+    host.default_output_device()
+}
+
+enum AudioCommand {
+    Play(String, mpsc::Sender<Result<(), String>>),
+    Stop,
+    Shutdown,
+}
+
+pub struct AudioPlayer {
+    tx: mpsc::Sender<AudioCommand>,
+}
+
+// AudioPlayer only holds a Sender which is Send + Sync
+unsafe impl Sync for AudioPlayer {}
+
+impl AudioPlayer {
+    pub fn new() -> Self {
+        let (tx, rx) = mpsc::channel::<AudioCommand>();
+
+        std::thread::spawn(move || {
+            // These stay on this thread — no Send/Sync needed
+            let mut current_sink: Option<rodio::Sink> = None;
+            let mut current_stream: Option<rodio::OutputStream> = None;
+
+            while let Ok(cmd) = rx.recv() {
+                match cmd {
+                    AudioCommand::Play(path, reply) => {
+                        // Stop previous playback
+                        if let Some(sink) = current_sink.take() {
+                            sink.stop();
+                        }
+                        current_stream.take();
+
+                        let result = (|| -> Result<(), String> {
+                            let device = find_physical_device()
+                                .ok_or("No audio output device found")?;
+
+                            let (stream, stream_handle) =
+                                rodio::OutputStream::try_from_device(&device)
+                                    .map_err(|e| format!("Failed to open device: {}", e))?;
+
+                            let sink = rodio::Sink::try_new(&stream_handle)
+                                .map_err(|e| format!("Failed to create sink: {}", e))?;
+
+                            let file = std::fs::File::open(&path)
+                                .map_err(|e| format!("Failed to open file: {}", e))?;
+
+                            let reader = std::io::BufReader::new(file);
+                            let source = rodio::Decoder::new(reader)
+                                .or_else(|_| {
+                                    // Retry as WAV — some TTS services return WAV with .mp3 extension
+                                    let file2 = std::fs::File::open(&path)
+                                        .map_err(|e| rodio::decoder::DecoderError::IoError(e.to_string()))?;
+                                    rodio::Decoder::new_wav(std::io::BufReader::new(file2))
+                                })
+                                .map_err(|e| format!("Failed to decode audio: {}", e))?;
+
+                            sink.append(source);
+                            current_sink = Some(sink);
+                            current_stream = Some(stream);
+                            Ok(())
+                        })();
+
+                        let _ = reply.send(result);
+                    }
+                    AudioCommand::Stop => {
+                        if let Some(sink) = current_sink.take() {
+                            sink.stop();
+                        }
+                        current_stream.take();
+                    }
+                    AudioCommand::Shutdown => break,
+                }
+            }
+        });
+
+        AudioPlayer { tx }
+    }
+
+    pub fn play(&self, file_path: &str) -> Result<(), String> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.tx
+            .send(AudioCommand::Play(file_path.to_string(), reply_tx))
+            .map_err(|e| format!("Audio thread gone: {}", e))?;
+        reply_rx
+            .recv()
+            .map_err(|e| format!("Audio thread reply failed: {}", e))?
+    }
+
+    pub fn stop(&self) {
+        let _ = self.tx.send(AudioCommand::Stop);
+    }
+}
+
+impl Drop for AudioPlayer {
+    fn drop(&mut self) {
+        let _ = self.tx.send(AudioCommand::Shutdown);
+    }
+}
+
+#[tauri::command]
+pub fn play_audio(
+    state: tauri::State<'_, AudioPlayer>,
+    file_path: String,
+) -> Result<(), AppError> {
+    state.play(&file_path).map_err(AppError::Audio)
+}
+
+#[tauri::command]
+pub fn stop_audio(
+    state: tauri::State<'_, AudioPlayer>,
+) -> Result<(), AppError> {
+    state.stop();
+    Ok(())
+}
 
 /// Detect which script lines are missing audio fragments.
 ///

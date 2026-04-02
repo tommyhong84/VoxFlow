@@ -5,7 +5,7 @@ import type { UserSettings } from '../types';
 interface SettingsStore {
     llmEndpoint: string;
     llmModel: string;
-    defaultTtsEngine: 'edge-tts' | 'azure-tts' | 'dashscope-tts';
+    defaultTtsModel: string;
     defaultVoiceName: string;
     defaultSpeed: number;
     defaultPitch: number;
@@ -17,10 +17,10 @@ interface SettingsStore {
 }
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
-    llmEndpoint: 'https://api.openai.com/v1',
-    llmModel: 'gpt-4',
-    defaultTtsEngine: 'edge-tts',
-    defaultVoiceName: 'zh-CN-XiaoxiaoNeural',
+    llmEndpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    llmModel: 'qwen3.5-plus',
+    defaultTtsModel: 'qwen3-tts-flash',
+    defaultVoiceName: 'Cherry',
     defaultSpeed: 1.0,
     defaultPitch: 1.0,
 
@@ -30,7 +30,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
             set({
                 llmEndpoint: settings.llm_endpoint,
                 llmModel: settings.llm_model,
-                defaultTtsEngine: settings.default_tts_engine,
+                defaultTtsModel: settings.default_tts_model,
                 defaultVoiceName: settings.default_voice_name,
                 defaultSpeed: settings.default_speed,
                 defaultPitch: settings.default_pitch,
@@ -45,7 +45,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         const settings: UserSettings = {
             llm_endpoint: state.llmEndpoint,
             llm_model: state.llmModel,
-            default_tts_engine: state.defaultTtsEngine,
+            default_tts_model: state.defaultTtsModel,
             default_voice_name: state.defaultVoiceName,
             default_speed: state.defaultSpeed,
             default_pitch: state.defaultPitch,

@@ -5,8 +5,8 @@ import type { CharacterInput, Character } from '../../types';
 
 const defaultInput: CharacterInput = {
     name: '',
-    tts_engine: 'edge-tts',
-    voice_name: 'zh-CN-XiaoxiaoNeural',
+    tts_model: 'qwen3-tts-flash',
+    voice_name: 'Cherry',
     speed: 1.0,
     pitch: 1.0,
 };
@@ -28,7 +28,7 @@ export default function CharacterPanel() {
         setIsCreating(false);
         setForm({
             name: c.name,
-            tts_engine: c.tts_engine,
+            tts_model: c.tts_model,
             voice_name: c.voice_name,
             speed: c.speed,
             pitch: c.pitch,
@@ -71,15 +71,16 @@ export default function CharacterPanel() {
             </div>
             <div className="grid grid-cols-2 gap-4">
                 <div>
-                    <label className="block text-sm font-medium mb-1">TTS 引擎</label>
+                    <label className="block text-sm font-medium mb-1">TTS 模型</label>
                     <select
                         className="w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm dark:bg-gray-900"
-                        value={form.tts_engine}
-                        onChange={(e) => setForm({ ...form, tts_engine: e.target.value as 'edge-tts' | 'azure-tts' | 'dashscope-tts' })}
+                        value={form.tts_model}
+                        onChange={(e) => setForm({ ...form, tts_model: e.target.value })}
                     >
-                        <option value="edge-tts">Edge TTS</option>
-                        <option value="azure-tts">Azure TTS</option>
-                        <option value="dashscope-tts">阿里百炼 (CosyVoice)</option>
+                        <option value="qwen3-tts-flash">Qwen3 TTS Flash</option>
+                        <option value="qwen3-tts-instruct-flash">Qwen3 TTS Instruct Flash</option>
+                        <option value="cosyvoice-v3-flash">CosyVoice v3 Flash</option>
+                        <option value="cosyvoice-v3-plus">CosyVoice v3 Plus</option>
                     </select>
                 </div>
                 <div>
@@ -88,47 +89,27 @@ export default function CharacterPanel() {
                         className="w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm dark:bg-gray-900"
                         value={form.voice_name}
                         onChange={(e) => setForm({ ...form, voice_name: e.target.value })}
-                        placeholder="zh-CN-XiaoxiaoNeural"
+                        placeholder="Cherry"
                     />
                 </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
                 <div>
                     <label className="block text-sm font-medium mb-1">语速 ({form.speed.toFixed(1)}x)</label>
-                    <input
-                        type="range"
-                        min="0.5"
-                        max="2.0"
-                        step="0.1"
-                        className="w-full"
-                        value={form.speed}
-                        onChange={(e) => setForm({ ...form, speed: parseFloat(e.target.value) })}
-                    />
+                    <input type="range" min="0.5" max="2.0" step="0.1" className="w-full"
+                        value={form.speed} onChange={(e) => setForm({ ...form, speed: parseFloat(e.target.value) })} />
                 </div>
                 <div>
                     <label className="block text-sm font-medium mb-1">音调 ({form.pitch.toFixed(1)}x)</label>
-                    <input
-                        type="range"
-                        min="0.5"
-                        max="2.0"
-                        step="0.1"
-                        className="w-full"
-                        value={form.pitch}
-                        onChange={(e) => setForm({ ...form, pitch: parseFloat(e.target.value) })}
-                    />
+                    <input type="range" min="0.5" max="2.0" step="0.1" className="w-full"
+                        value={form.pitch} onChange={(e) => setForm({ ...form, pitch: parseFloat(e.target.value) })} />
                 </div>
             </div>
             <div className="flex gap-2 justify-end">
-                <button
-                    className="flex items-center gap-1 rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-1.5 text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
-                    onClick={cancel}
-                >
+                <button className="flex items-center gap-1 rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-1.5 text-sm hover:bg-gray-100 dark:hover:bg-gray-700" onClick={cancel}>
                     <X className="h-4 w-4" /> 取消
                 </button>
-                <button
-                    className="flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
-                    onClick={handleSave}
-                >
+                <button className="flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700" onClick={handleSave}>
                     <Save className="h-4 w-4" /> 保存
                 </button>
             </div>
@@ -139,44 +120,28 @@ export default function CharacterPanel() {
         <div className="mx-auto max-w-3xl px-6 py-8">
             <div className="flex items-center justify-between mb-6">
                 <h2 className="text-xl font-bold">角色管理</h2>
-                <button
-                    className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-                    onClick={startCreate}
-                >
+                <button className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700" onClick={startCreate}>
                     <Plus className="h-4 w-4" /> 新建角色
                 </button>
             </div>
-
             {isCreating && renderForm()}
-
             <div className="space-y-3 mt-4">
                 {characters.map((c) =>
                     editing === c.id ? (
                         <div key={c.id}>{renderForm()}</div>
                     ) : (
-                        <div
-                            key={c.id}
-                            className="flex items-center justify-between rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4"
-                        >
+                        <div key={c.id} className="flex items-center justify-between rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
                             <div>
                                 <p className="font-medium">{c.name}</p>
                                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                                    {c.tts_engine} · {c.voice_name} · 语速 {c.speed}x · 音调 {c.pitch}x
+                                    {c.tts_model} · {c.voice_name} · 语速 {c.speed}x · 音调 {c.pitch}x
                                 </p>
                             </div>
                             <div className="flex gap-2">
-                                <button
-                                    className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500"
-                                    onClick={() => startEdit(c)}
-                                    aria-label={`Edit ${c.name}`}
-                                >
+                                <button className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500" onClick={() => startEdit(c)} aria-label={`Edit ${c.name}`}>
                                     <Pencil className="h-4 w-4" />
                                 </button>
-                                <button
-                                    className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-500 hover:text-red-500"
-                                    onClick={() => handleDelete(c.id)}
-                                    aria-label={`Delete ${c.name}`}
-                                >
+                                <button className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-500 hover:text-red-500" onClick={() => handleDelete(c.id)} aria-label={`Delete ${c.name}`}>
                                     <Trash2 className="h-4 w-4" />
                                 </button>
                             </div>

@@ -101,14 +101,14 @@ export async function generateTts(
     lineId: string,
     text: string,
     voiceConfig: VoiceConfig,
-    apiKey?: string,
+    apiKey: string,
 ): Promise<AudioFragment> {
     return ipcCall<AudioFragment>('generate_tts', {
         projectId,
         lineId,
         text,
         voiceConfig,
-        apiKey: apiKey ?? null,
+        apiKey,
     });
 }
 

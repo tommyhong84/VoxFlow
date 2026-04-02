@@ -3,7 +3,7 @@ use std::path::Path;
 use rusqlite::Connection;
 
 use super::error::AppError;
-use super::models::{AudioFragment, Character, Project, ProjectDetail, ScriptLine, TtsEngine, UserSettings};
+use super::models::{AudioFragment, Character, Project, ProjectDetail, ScriptLine, UserSettings};
 
 pub struct Database {
     conn: Connection,
@@ -37,7 +37,7 @@ impl Database {
                     id          TEXT PRIMARY KEY,
                     project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
                     name        TEXT NOT NULL,
-                    tts_engine  TEXT NOT NULL DEFAULT 'edge-tts',
+                    tts_model   TEXT NOT NULL DEFAULT 'qwen3-tts-flash',
                     voice_name  TEXT NOT NULL,
                     speed       REAL NOT NULL DEFAULT 1.0,
                     pitch       REAL NOT NULL DEFAULT 1.0,
@@ -154,12 +154,12 @@ impl Database {
     pub fn insert_character(&self, character: &Character) -> Result<(), AppError> {
         self.conn
             .execute(
-                "INSERT INTO characters (id, project_id, name, tts_engine, voice_name, speed, pitch) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO characters (id, project_id, name, tts_model, voice_name, speed, pitch) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 rusqlite::params![
                     character.id,
                     character.project_id,
                     character.name,
-                    tts_engine_to_str(&character.tts_engine),
+                    character.tts_model,
                     character.voice_name,
                     character.speed,
                     character.pitch,
@@ -174,10 +174,10 @@ impl Database {
         let affected = self
             .conn
             .execute(
-                "UPDATE characters SET name = ?1, tts_engine = ?2, voice_name = ?3, speed = ?4, pitch = ?5 WHERE id = ?6",
+                "UPDATE characters SET name = ?1, tts_model = ?2, voice_name = ?3, speed = ?4, pitch = ?5 WHERE id = ?6",
                 rusqlite::params![
                     character.name,
-                    tts_engine_to_str(&character.tts_engine),
+                    character.tts_model,
                     character.voice_name,
                     character.speed,
                     character.pitch,
@@ -220,24 +220,16 @@ impl Database {
     pub fn list_characters(&self, project_id: &str) -> Result<Vec<Character>, AppError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, project_id, name, tts_engine, voice_name, speed, pitch FROM characters WHERE project_id = ?1")
+            .prepare("SELECT id, project_id, name, tts_model, voice_name, speed, pitch FROM characters WHERE project_id = ?1")
             .map_err(|e| AppError::Database(e.to_string()))?;
 
         let characters = stmt
             .query_map(rusqlite::params![project_id], |row| {
-                let engine_str: String = row.get(3)?;
-                let tts_engine = tts_engine_from_str(&engine_str).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        3,
-                        rusqlite::types::Type::Text,
-                        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-                    )
-                })?;
                 Ok(Character {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
                     name: row.get(2)?,
-                    tts_engine,
+                    tts_model: row.get(3)?,
                     voice_name: row.get(4)?,
                     speed: row.get(5)?,
                     pitch: row.get(6)?,
@@ -383,8 +375,8 @@ impl Database {
     /// Load user settings from the database. If no settings exist, return defaults:
     /// - llm_endpoint: "https://api.openai.com/v1"
     /// - llm_model: "gpt-4"
-    /// - default_tts_engine: TtsEngine::EdgeTts
-    /// - default_voice_name: "zh-CN-XiaoxiaoNeural"
+    /// - default_tts_model: "qwen3-tts-flash"
+    /// - default_voice_name: "Cherry"
     /// - default_speed: 1.0
     /// - default_pitch: 1.0
     pub fn load_settings(&self) -> Result<UserSettings, AppError> {
@@ -400,8 +392,8 @@ impl Database {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(UserSettings {
                 llm_endpoint: "https://api.openai.com/v1".to_string(),
                 llm_model: "gpt-4".to_string(),
-                default_tts_engine: TtsEngine::EdgeTts,
-                default_voice_name: "zh-CN-XiaoxiaoNeural".to_string(),
+                default_tts_model: "qwen3-tts-flash".to_string(),
+                default_voice_name: "Cherry".to_string(),
                 default_speed: 1.0,
                 default_pitch: 1.0,
             }),
@@ -446,24 +438,7 @@ impl Database {
     }
 }
 
-/// Convert a TtsEngine enum to its string representation for database storage.
-fn tts_engine_to_str(engine: &TtsEngine) -> &'static str {
-    match engine {
-        TtsEngine::EdgeTts => "edge-tts",
-        TtsEngine::AzureTts => "azure-tts",
-        TtsEngine::DashscopeTts => "dashscope-tts",
-    }
-}
 
-/// Parse a TtsEngine from its string representation stored in the database.
-fn tts_engine_from_str(s: &str) -> Result<TtsEngine, String> {
-    match s {
-        "edge-tts" => Ok(TtsEngine::EdgeTts),
-        "azure-tts" => Ok(TtsEngine::AzureTts),
-        "dashscope-tts" => Ok(TtsEngine::DashscopeTts),
-        other => Err(format!("Unknown TTS engine: {}", other)),
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -804,12 +779,12 @@ mod tests {
 
     // ---- Character CRUD tests ----
 
-    fn make_character(id: &str, project_id: &str, name: &str, engine: TtsEngine) -> Character {
+    fn make_character(id: &str, project_id: &str, name: &str, tts_model: &str) -> Character {
         Character {
             id: id.to_string(),
             project_id: project_id.to_string(),
             name: name.to_string(),
-            tts_engine: engine,
+            tts_model: tts_model.to_string(),
             voice_name: "en-US-AriaNeural".to_string(),
             speed: 1.0,
             pitch: 1.0,
@@ -831,8 +806,8 @@ mod tests {
         let (db, _dir) = temp_db();
         setup_project(&db, "p1");
 
-        let c1 = make_character("c1", "p1", "Alice", TtsEngine::EdgeTts);
-        let c2 = make_character("c2", "p1", "Bob", TtsEngine::AzureTts);
+        let c1 = make_character("c1", "p1", "Alice", "qwen3-tts-flash");
+        let c2 = make_character("c2", "p1", "Bob", "cosyvoice-v3-flash");
         db.insert_character(&c1).unwrap();
         db.insert_character(&c2).unwrap();
 
@@ -859,8 +834,8 @@ mod tests {
         setup_project(&db, "p1");
         setup_project(&db, "p2");
 
-        let c1 = make_character("c1", "p1", "Alice", TtsEngine::EdgeTts);
-        let c2 = make_character("c2", "p2", "Bob", TtsEngine::AzureTts);
+        let c1 = make_character("c1", "p1", "Alice", "qwen3-tts-flash");
+        let c2 = make_character("c2", "p2", "Bob", "cosyvoice-v3-flash");
         db.insert_character(&c1).unwrap();
         db.insert_character(&c2).unwrap();
 
@@ -882,7 +857,7 @@ mod tests {
             id: "c1".to_string(),
             project_id: "p1".to_string(),
             name: "Narrator".to_string(),
-            tts_engine: TtsEngine::AzureTts,
+            tts_model: "cosyvoice-v3-flash".to_string(),
             voice_name: "zh-CN-XiaoxiaoNeural".to_string(),
             speed: 1.5,
             pitch: 0.8,
@@ -895,14 +870,10 @@ mod tests {
         assert_eq!(loaded.id, "c1");
         assert_eq!(loaded.project_id, "p1");
         assert_eq!(loaded.name, "Narrator");
+        assert_eq!(loaded.tts_model, "cosyvoice-v3-flash");
         assert_eq!(loaded.voice_name, "zh-CN-XiaoxiaoNeural");
         assert!((loaded.speed - 1.5).abs() < f32::EPSILON);
         assert!((loaded.pitch - 0.8).abs() < f32::EPSILON);
-        // Verify TtsEngine round-trips correctly
-        match &loaded.tts_engine {
-            TtsEngine::AzureTts => {} // expected
-            other => panic!("Expected AzureTts, got {:?}", other),
-        }
     }
 
     #[test]
@@ -910,14 +881,14 @@ mod tests {
         let (db, _dir) = temp_db();
         setup_project(&db, "p1");
 
-        let c = make_character("c1", "p1", "Alice", TtsEngine::EdgeTts);
+        let c = make_character("c1", "p1", "Alice", "qwen3-tts-flash");
         db.insert_character(&c).unwrap();
 
         let updated = Character {
             id: "c1".to_string(),
             project_id: "p1".to_string(),
             name: "Alice Updated".to_string(),
-            tts_engine: TtsEngine::AzureTts,
+            tts_model: "cosyvoice-v3-flash".to_string(),
             voice_name: "zh-CN-YunxiNeural".to_string(),
             speed: 2.0,
             pitch: 0.5,
@@ -928,13 +899,10 @@ mod tests {
         assert_eq!(chars.len(), 1);
         let loaded = &chars[0];
         assert_eq!(loaded.name, "Alice Updated");
+        assert_eq!(loaded.tts_model, "cosyvoice-v3-flash");
         assert_eq!(loaded.voice_name, "zh-CN-YunxiNeural");
         assert!((loaded.speed - 2.0).abs() < f32::EPSILON);
         assert!((loaded.pitch - 0.5).abs() < f32::EPSILON);
-        match &loaded.tts_engine {
-            TtsEngine::AzureTts => {}
-            other => panic!("Expected AzureTts, got {:?}", other),
-        }
     }
 
     #[test]
@@ -942,7 +910,7 @@ mod tests {
         let (db, _dir) = temp_db();
         setup_project(&db, "p1");
 
-        let c = make_character("nonexistent", "p1", "Ghost", TtsEngine::EdgeTts);
+        let c = make_character("nonexistent", "p1", "Ghost", "qwen3-tts-flash");
         let result = db.update_character(&c);
         assert!(result.is_err());
     }
@@ -952,7 +920,7 @@ mod tests {
         let (db, _dir) = temp_db();
         setup_project(&db, "p1");
 
-        let c = make_character("c1", "p1", "Alice", TtsEngine::EdgeTts);
+        let c = make_character("c1", "p1", "Alice", "qwen3-tts-flash");
         db.insert_character(&c).unwrap();
         db.delete_character("c1").unwrap();
 
@@ -972,7 +940,7 @@ mod tests {
         let (db, _dir) = temp_db();
         setup_project(&db, "p1");
 
-        let c = make_character("c1", "p1", "Alice", TtsEngine::EdgeTts);
+        let c = make_character("c1", "p1", "Alice", "qwen3-tts-flash");
         db.insert_character(&c).unwrap();
 
         // Insert a script line referencing this character
@@ -997,33 +965,15 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_character_edge_tts_engine() {
+    fn test_insert_character_tts_model_roundtrip() {
         let (db, _dir) = temp_db();
         setup_project(&db, "p1");
 
-        let c = make_character("c1", "p1", "Narrator", TtsEngine::EdgeTts);
+        let c = make_character("c1", "p1", "Narrator", "cosyvoice-v3-flash");
         db.insert_character(&c).unwrap();
 
         let chars = db.list_characters("p1").unwrap();
-        match &chars[0].tts_engine {
-            TtsEngine::EdgeTts => {}
-            other => panic!("Expected EdgeTts, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_insert_character_dashscope_tts_engine() {
-        let (db, _dir) = temp_db();
-        setup_project(&db, "p1");
-
-        let c = make_character("c1", "p1", "Narrator", TtsEngine::DashscopeTts);
-        db.insert_character(&c).unwrap();
-
-        let chars = db.list_characters("p1").unwrap();
-        match &chars[0].tts_engine {
-            TtsEngine::DashscopeTts => {}
-            other => panic!("Expected DashscopeTts, got {:?}", other),
-        }
+        assert_eq!(chars[0].tts_model, "cosyvoice-v3-flash");
     }
 
     // ---- Script Line tests ----
@@ -1111,7 +1061,7 @@ mod tests {
         let (db, _dir) = temp_db();
         setup_project(&db, "p1");
 
-        let c = make_character("c1", "p1", "Alice", TtsEngine::EdgeTts);
+        let c = make_character("c1", "p1", "Alice", "qwen3-tts-flash");
         db.insert_character(&c).unwrap();
 
         let lines = vec![
@@ -1287,8 +1237,8 @@ mod tests {
         UserSettings {
             llm_endpoint: "https://api.openai.com/v1".to_string(),
             llm_model: "gpt-4".to_string(),
-            default_tts_engine: TtsEngine::EdgeTts,
-            default_voice_name: "zh-CN-XiaoxiaoNeural".to_string(),
+            default_tts_model: "qwen3-tts-flash".to_string(),
+            default_voice_name: "Cherry".to_string(),
             default_speed: 1.0,
             default_pitch: 1.0,
         }
@@ -1301,13 +1251,10 @@ mod tests {
 
         assert_eq!(settings.llm_endpoint, "https://api.openai.com/v1");
         assert_eq!(settings.llm_model, "gpt-4");
-        assert_eq!(settings.default_voice_name, "zh-CN-XiaoxiaoNeural");
+        assert_eq!(settings.default_tts_model, "qwen3-tts-flash");
+        assert_eq!(settings.default_voice_name, "Cherry");
         assert!((settings.default_speed - 1.0).abs() < f32::EPSILON);
         assert!((settings.default_pitch - 1.0).abs() < f32::EPSILON);
-        match settings.default_tts_engine {
-            TtsEngine::EdgeTts => {}
-            other => panic!("Expected EdgeTts, got {:?}", other),
-        }
     }
 
     #[test]
@@ -1316,7 +1263,7 @@ mod tests {
         let settings = UserSettings {
             llm_endpoint: "https://custom.api.com/v1".to_string(),
             llm_model: "gpt-3.5-turbo".to_string(),
-            default_tts_engine: TtsEngine::AzureTts,
+            default_tts_model: "cosyvoice-v3-flash".to_string(),
             default_voice_name: "en-US-AriaNeural".to_string(),
             default_speed: 1.5,
             default_pitch: 0.8,
@@ -1327,13 +1274,10 @@ mod tests {
 
         assert_eq!(loaded.llm_endpoint, "https://custom.api.com/v1");
         assert_eq!(loaded.llm_model, "gpt-3.5-turbo");
+        assert_eq!(loaded.default_tts_model, "cosyvoice-v3-flash");
         assert_eq!(loaded.default_voice_name, "en-US-AriaNeural");
         assert!((loaded.default_speed - 1.5).abs() < f32::EPSILON);
         assert!((loaded.default_pitch - 0.8).abs() < f32::EPSILON);
-        match loaded.default_tts_engine {
-            TtsEngine::AzureTts => {}
-            other => panic!("Expected AzureTts, got {:?}", other),
-        }
     }
 
     #[test]
@@ -1346,7 +1290,7 @@ mod tests {
         let second = UserSettings {
             llm_endpoint: "https://other.api.com".to_string(),
             llm_model: "claude-3".to_string(),
-            default_tts_engine: TtsEngine::AzureTts,
+            default_tts_model: "cosyvoice-v3-flash".to_string(),
             default_voice_name: "ja-JP-NanamiNeural".to_string(),
             default_speed: 2.0,
             default_pitch: 0.5,
@@ -1356,13 +1300,10 @@ mod tests {
         let loaded = db.load_settings().unwrap();
         assert_eq!(loaded.llm_endpoint, "https://other.api.com");
         assert_eq!(loaded.llm_model, "claude-3");
+        assert_eq!(loaded.default_tts_model, "cosyvoice-v3-flash");
         assert_eq!(loaded.default_voice_name, "ja-JP-NanamiNeural");
         assert!((loaded.default_speed - 2.0).abs() < f32::EPSILON);
         assert!((loaded.default_pitch - 0.5).abs() < f32::EPSILON);
-        match loaded.default_tts_engine {
-            TtsEngine::AzureTts => {}
-            other => panic!("Expected AzureTts, got {:?}", other),
-        }
     }
 
     #[test]
@@ -1388,8 +1329,8 @@ mod tests {
         setup_project(&db, "p1");
 
         // Insert characters
-        let c1 = make_character("c1", "p1", "Alice", TtsEngine::EdgeTts);
-        let c2 = make_character("c2", "p1", "Bob", TtsEngine::AzureTts);
+        let c1 = make_character("c1", "p1", "Alice", "qwen3-tts-flash");
+        let c2 = make_character("c2", "p1", "Bob", "cosyvoice-v3-flash");
         db.insert_character(&c1).unwrap();
         db.insert_character(&c2).unwrap();
 

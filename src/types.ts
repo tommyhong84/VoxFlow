@@ -16,8 +16,8 @@ export interface Character {
     id: string;
     project_id: string;
     name: string;
-    tts_engine: 'edge-tts' | 'azure-tts' | 'dashscope-tts';
     voice_name: string;
+    tts_model: string;
     speed: number;
     pitch: number;
 }
@@ -39,8 +39,8 @@ export interface AudioFragment {
 }
 
 export interface VoiceConfig {
-    engine: 'edge-tts' | 'azure-tts' | 'dashscope-tts';
     voice_name: string;
+    tts_model: string;
     speed: number;
     pitch: number;
 }
@@ -66,7 +66,7 @@ export interface MixProgress {
 export interface UserSettings {
     llm_endpoint: string;
     llm_model: string;
-    default_tts_engine: 'edge-tts' | 'azure-tts' | 'dashscope-tts';
+    default_tts_model: string;
     default_voice_name: string;
     default_speed: number;
     default_pitch: number;
@@ -74,8 +74,8 @@ export interface UserSettings {
 
 export interface CharacterInput {
     name: string;
-    tts_engine: 'edge-tts' | 'azure-tts' | 'dashscope-tts';
     voice_name: string;
+    tts_model: string;
     speed: number;
     pitch: number;
 }

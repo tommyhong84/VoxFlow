@@ -4,11 +4,16 @@ use tauri::Manager;
 
 use crate::core::db::Database;
 use crate::core::error::AppError;
-use crate::core::models::{AudioFragment, TtsEngine, VoiceConfig};
+use crate::core::models::{AudioFragment, VoiceConfig};
+use log::{debug, info, error};
 
 /// Build the audio file path for a given project and line.
 /// Returns `{app_data_dir}/projects/{project_id}/audio/{line_id}.mp3`
-pub fn build_audio_path(app_data_dir: &std::path::Path, project_id: &str, line_id: &str) -> std::path::PathBuf {
+pub fn build_audio_path(
+    app_data_dir: &std::path::Path,
+    project_id: &str,
+    line_id: &str,
+) -> std::path::PathBuf {
     app_data_dir
         .join("projects")
         .join(project_id)
@@ -24,7 +29,7 @@ pub async fn generate_tts(
     line_id: String,
     text: String,
     voice_config: VoiceConfig,
-    api_key: Option<String>,
+    api_key: String,
 ) -> Result<AudioFragment, AppError> {
     let app_data_dir = app
         .path()
@@ -33,34 +38,46 @@ pub async fn generate_tts(
 
     let audio_path = build_audio_path(&app_data_dir, &project_id, &line_id);
 
-    // Ensure the audio directory exists
     if let Some(parent) = audio_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             AppError::FileSystem(format!("Failed to create audio directory: {}", e))
         })?;
     }
 
-    // Call TTS API based on engine type
-    let audio_bytes = match voice_config.engine {
-        TtsEngine::EdgeTts => call_edge_tts(&text, &voice_config).await?,
-        TtsEngine::AzureTts => {
-            let key = api_key.clone().ok_or_else(|| {
-                AppError::Config("Azure TTS requires an API key".to_string())
-            })?;
-            call_azure_tts(&text, &voice_config, &key).await?
-        }
-        TtsEngine::DashscopeTts => {
-            let key = api_key.clone().ok_or_else(|| {
-                AppError::Config("阿里百炼 TTS 需要 API Key".to_string())
-            })?;
-            call_dashscope_tts(&text, &voice_config, &key).await?
-        }
-    };
+    let audio_bytes =
+        call_dashscope_tts(&text, &voice_config, &api_key).await?;
 
-    // Save audio file
     std::fs::write(&audio_path, &audio_bytes).map_err(|e| {
         AppError::FileSystem(format!("Failed to write audio file: {}", e))
     })?;
+
+    // Re-encode with FFmpeg to fix VBR headers and ensure valid MP3 format.
+    // TTS services may return WAV disguised as .mp3 or VBR MP3 with bad headers.
+    let tmp_path = audio_path.with_extension("tmp.mp3");
+    let ffmpeg_result = std::process::Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-i", &audio_path.to_string_lossy(),
+            "-codec:a", "libmp3lame",
+            "-b:a", "192k",
+            &tmp_path.to_string_lossy(),
+        ])
+        .stderr(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .output();
+
+    match ffmpeg_result {
+        Ok(output) if output.status.success() => {
+            // Replace original with re-encoded file
+            std::fs::rename(&tmp_path, &audio_path).map_err(|e| {
+                AppError::FileSystem(format!("Failed to replace audio file: {}", e))
+            })?;
+        }
+        _ => {
+            // FFmpeg failed or not found — keep original file, clean up tmp
+            let _ = std::fs::remove_file(&tmp_path);
+        }
+    }
 
     let file_path = audio_path.to_string_lossy().to_string();
     let fragment = AudioFragment {
@@ -71,116 +88,19 @@ pub async fn generate_tts(
         duration_ms: None,
     };
 
-    // Upsert audio fragment record in database
     let db = db.lock().map_err(|e| AppError::Database(e.to_string()))?;
     db.upsert_audio_fragment(&fragment)?;
 
     Ok(fragment)
 }
 
-/// Call Edge TTS service to generate audio.
-/// Uses the edge-tts compatible HTTP endpoint.
-async fn call_edge_tts(text: &str, voice_config: &VoiceConfig) -> Result<Vec<u8>, AppError> {
-    use reqwest::header::CONTENT_TYPE;
-
-    // Edge TTS uses a WebSocket-based protocol. For simplicity, we use a REST-compatible
-    // approach via the Microsoft Speech API endpoint that Edge TTS wraps.
-
-    // Build SSML payload
-    let ssml = format!(
-        r#"<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="zh-CN">
-            <voice name="{}">
-                <prosody rate="{}" pitch="{}%">{}</prosody>
-            </voice>
-        </speak>"#,
-        voice_config.voice_name,
-        format_rate(voice_config.speed),
-        format_pitch(voice_config.pitch),
-        escape_xml(text),
-    );
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://eastus.api.speech.microsoft.com/cognitiveservices/v1")
-        .header(CONTENT_TYPE, "application/ssml+xml")
-        .header("X-Microsoft-OutputFormat", "audio-16khz-128kbitrate-mono-mp3")
-        .header("User-Agent", "VoxFlow/1.0")
-        .body(ssml)
-        .send()
-        .await
-        .map_err(|e| AppError::TtsService(format!("Edge TTS request failed: {}", e)))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(AppError::TtsService(format!(
-            "Edge TTS API error {}: {}",
-            status, body
-        )));
-    }
-
-    response
-        .bytes()
-        .await
-        .map(|b| b.to_vec())
-        .map_err(|e| AppError::TtsService(format!("Failed to read Edge TTS response: {}", e)))
-}
-
-/// Call Azure TTS service to generate audio.
-async fn call_azure_tts(
-    text: &str,
-    voice_config: &VoiceConfig,
-    api_key: &str,
-) -> Result<Vec<u8>, AppError> {
-    use reqwest::header::CONTENT_TYPE;
-
-    let ssml = format!(
-        r#"<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="zh-CN">
-            <voice name="{}">
-                <prosody rate="{}" pitch="{}%">{}</prosody>
-            </voice>
-        </speak>"#,
-        voice_config.voice_name,
-        format_rate(voice_config.speed),
-        format_pitch(voice_config.pitch),
-        escape_xml(text),
-    );
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://eastus.tts.speech.microsoft.com/cognitiveservices/v1")
-        .header(CONTENT_TYPE, "application/ssml+xml")
-        .header("Ocp-Apim-Subscription-Key", api_key)
-        .header("X-Microsoft-OutputFormat", "audio-16khz-128kbitrate-mono-mp3")
-        .header("User-Agent", "VoxFlow/1.0")
-        .body(ssml)
-        .send()
-        .await
-        .map_err(|e| AppError::TtsService(format!("Azure TTS request failed: {}", e)))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(AppError::TtsService(format!(
-            "Azure TTS API error {}: {}",
-            status, body
-        )));
-    }
-
-    response
-        .bytes()
-        .await
-        .map(|b| b.to_vec())
-        .map_err(|e| AppError::TtsService(format!("Failed to read Azure TTS response: {}", e)))
-}
-
-/// 调用阿里百炼 (DashScope) CosyVoice TTS 服务生成音频。
+/// 调用阿里百炼 (DashScope) Qwen-TTS / CosyVoice 服务生成音频。
 ///
-/// 使用 DashScope REST API：
+/// API 端点（北京地域）：
 /// POST https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
 ///
-/// voice_config.voice_name 对应 CosyVoice 音色名（如 "longanyang"、"longxiaochun" 等）。
-/// 默认使用 cosyvoice-v3-flash 模型。
+/// voice_config.tts_model 指定模型名（如 "qwen3-tts-flash"、"cosyvoice-v3-flash"）
+/// voice_config.voice_name 指定音色（如 "Cherry"、"longanyang"）
 async fn call_dashscope_tts(
     text: &str,
     voice_config: &VoiceConfig,
@@ -189,19 +109,26 @@ async fn call_dashscope_tts(
     use reqwest::header::CONTENT_TYPE;
     use serde_json::json;
 
+    let model = if voice_config.tts_model.is_empty() {
+        "qwen3-tts-flash"
+    } else {
+        &voice_config.tts_model
+    };
+
     let body = json!({
-        "model": "cosyvoice-v3-flash",
+        "model": model,
         "input": {
-            "text": text,
+            "text": text, 
             "voice": voice_config.voice_name,
-            "speech_rate": voice_config.speed,
-            "pitch_rate": voice_config.pitch
-        },
-        "parameters": {
-            "response_format": "mp3",
-            "sample_rate": 22050
+            // "language_type": "Chinese",
         }
     });
+
+    // 使用 debug! 宏，只有在设置 RUST_LOG=debug 时才会显示，避免生产环境日志过多
+    debug!("🚀 正在构造 TTS 请求:");
+    // serde_json::to_string_pretty 可以格式化输出 JSON，方便阅读
+    debug!("{}", serde_json::to_string_pretty(&body).unwrap()); 
+    
 
     let client = reqwest::Client::new();
     let response = client
@@ -222,15 +149,13 @@ async fn call_dashscope_tts(
         )));
     }
 
-    // DashScope returns JSON with base64-encoded audio in output.audio.data
     let resp_body: serde_json::Value = response
         .json()
         .await
         .map_err(|e| AppError::TtsService(format!("解析百炼 TTS 响应失败: {}", e)))?;
 
-    // Try to extract audio URL first (non-streaming returns a URL)
+    // Non-streaming: response contains audio URL in output.audio.url
     if let Some(url) = resp_body["output"]["audio"]["url"].as_str() {
-        // Download audio from the URL
         let audio_response = client
             .get(url)
             .send()
@@ -244,7 +169,7 @@ async fn call_dashscope_tts(
             .map_err(|e| AppError::TtsService(format!("读取百炼 TTS 音频失败: {}", e)));
     }
 
-    // Fallback: try base64-encoded audio data
+    // Fallback: base64-encoded audio data
     if let Some(data) = resp_body["output"]["audio"]["data"].as_str() {
         use base64::Engine;
         return base64::engine::general_purpose::STANDARD
@@ -256,33 +181,6 @@ async fn call_dashscope_tts(
         "百炼 TTS 响应中未找到音频数据: {}",
         resp_body
     )))
-}
-
-/// Format speed value for SSML prosody rate attribute.
-/// 1.0 → "+0%", 1.5 → "+50%", 0.5 → "-50%"
-fn format_rate(speed: f32) -> String {
-    let percent = ((speed - 1.0) * 100.0) as i32;
-    if percent >= 0 {
-        format!("+{}%", percent)
-    } else {
-        format!("{}%", percent)
-    }
-}
-
-/// Format pitch value for SSML prosody pitch attribute.
-/// 1.0 → "0", 1.5 → "50", 0.5 → "-50"
-fn format_pitch(pitch: f32) -> String {
-    let percent = ((pitch - 1.0) * 100.0) as i32;
-    format!("{}", percent)
-}
-
-/// Escape special XML characters in text.
-fn escape_xml(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 #[cfg(test)]
@@ -297,28 +195,5 @@ mod tests {
             path,
             std::path::PathBuf::from("/data/projects/proj-1/audio/line-42.mp3")
         );
-    }
-
-    #[test]
-    fn test_format_rate() {
-        assert_eq!(format_rate(1.0), "+0%");
-        assert_eq!(format_rate(1.5), "+50%");
-        assert_eq!(format_rate(0.5), "-50%");
-        assert_eq!(format_rate(2.0), "+100%");
-    }
-
-    #[test]
-    fn test_format_pitch() {
-        assert_eq!(format_pitch(1.0), "0");
-        assert_eq!(format_pitch(1.5), "50");
-        assert_eq!(format_pitch(0.5), "-50");
-    }
-
-    #[test]
-    fn test_escape_xml() {
-        assert_eq!(escape_xml("hello & world"), "hello &amp; world");
-        assert_eq!(escape_xml("<tag>"), "&lt;tag&gt;");
-        assert_eq!(escape_xml("a\"b'c"), "a&quot;b&apos;c");
-        assert_eq!(escape_xml("no special chars"), "no special chars");
     }
 }

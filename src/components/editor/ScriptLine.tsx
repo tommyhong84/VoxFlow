@@ -26,18 +26,18 @@ export default function ScriptLineComponent({ line, index }: ScriptLineProps) {
         const character = characters.find((c) => c.id === line.character_id);
         setGenerating(true);
         try {
-            const apiKey = await ipc.loadApiKey('tts');
+            const apiKey = await ipc.loadApiKey('dashscope');
             const fragment = await ipc.generateTts(
                 currentProject.project.id,
                 line.id,
                 line.text,
                 {
-                    engine: character?.tts_engine ?? 'edge-tts',
-                    voice_name: character?.voice_name ?? 'zh-CN-XiaoxiaoNeural',
+                    tts_model: character?.tts_model ?? 'qwen3-tts-flash',
+                    voice_name: character?.voice_name ?? 'Cherry',
                     speed: character?.speed ?? 1.0,
                     pitch: character?.pitch ?? 1.0,
                 },
-                apiKey ?? undefined,
+                apiKey ?? '',
             );
             setAudioFragment(fragment);
         } catch (e) {

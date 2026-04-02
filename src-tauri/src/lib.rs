@@ -27,6 +27,7 @@ pub fn run() {
             db.migrate().expect("failed to run database migrations");
 
             app.manage(Mutex::new(db));
+            app.manage(commands::audio::AudioPlayer::new());
 
             Ok(())
         })
@@ -45,6 +46,12 @@ pub fn run() {
             commands::generate_tts,
             commands::export_audio_mix,
             commands::import_bgm,
+            commands::play_audio,
+            commands::stop_audio,
+            commands::save_settings,
+            commands::load_settings,
+            commands::save_api_key,
+            commands::load_api_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

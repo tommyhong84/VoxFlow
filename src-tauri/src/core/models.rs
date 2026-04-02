@@ -21,20 +21,10 @@ pub struct Character {
     pub id: String,
     pub project_id: String,
     pub name: String,
-    pub tts_engine: TtsEngine,
     pub voice_name: String,
+    pub tts_model: String,
     pub speed: f32,
     pub pitch: f32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TtsEngine {
-    #[serde(rename = "edge-tts")]
-    EdgeTts,
-    #[serde(rename = "azure-tts")]
-    AzureTts,
-    #[serde(rename = "dashscope-tts")]
-    DashscopeTts,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -57,8 +47,8 @@ pub struct AudioFragment {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoiceConfig {
-    pub engine: TtsEngine,
     pub voice_name: String,
+    pub tts_model: String,
     pub speed: f32,
     pub pitch: f32,
 }
@@ -88,7 +78,7 @@ pub struct MixProgress {
 pub struct UserSettings {
     pub llm_endpoint: String,
     pub llm_model: String,
-    pub default_tts_engine: TtsEngine,
+    pub default_tts_model: String,
     pub default_voice_name: String,
     pub default_speed: f32,
     pub default_pitch: f32,
@@ -97,8 +87,8 @@ pub struct UserSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CharacterInput {
     pub name: String,
-    pub tts_engine: TtsEngine,
     pub voice_name: String,
+    pub tts_model: String,
     pub speed: f32,
     pub pitch: f32,
 }

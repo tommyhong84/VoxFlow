@@ -29,7 +29,7 @@ export const useScriptStore = create<ScriptStore>((set, get) => ({
         if (!project) return;
 
         const settings = useSettingsStore.getState();
-        const apiKey = await ipc.loadApiKey('llm');
+        const apiKey = await ipc.loadApiKey('dashscope');
 
         set({ isGenerating: true, streamingText: '', lines: [] });
 
