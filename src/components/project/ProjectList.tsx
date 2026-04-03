@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import ProjectCard from './ProjectCard';
+import { Button } from '../ui/button';
+import { Input } from '../ui/input';
 
 interface ProjectListProps {
     onSelectProject: (projectId: string) => void;
@@ -38,31 +40,23 @@ export default function ProjectList({ onSelectProject, showInput, onShowInput }:
 
             {showInput && (
                 <div className="mb-6 flex gap-3">
-                    <input
-                        className="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
+                    <Input
+                        className="flex-1"
                         placeholder="输入项目名称..."
                         value={newName}
                         onChange={(e) => setNewName(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
                         autoFocus
                     />
-                    <button
-                        className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-                        onClick={handleCreate}
-                    >
-                        创建
-                    </button>
-                    <button
-                        className="rounded-lg border border-gray-300 px-4 py-2 text-sm hover:bg-gray-100 dark:border-gray-600 dark:hover:bg-gray-700"
-                        onClick={() => { onShowInput(false); setNewName(''); }}
-                    >
+                    <Button onClick={handleCreate}>创建</Button>
+                    <Button variant="outline" onClick={() => { onShowInput(false); setNewName(''); }}>
                         取消
-                    </button>
+                    </Button>
                 </div>
             )}
 
             {projects.length === 0 ? (
-                <p className="text-center text-gray-500 py-20">暂无项目，点击右上角 + 新建项目</p>
+                <p className="text-center text-muted-foreground py-20">暂无项目，点击右上角 + 新建项目</p>
             ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                     {projects.map((p) => (

@@ -5,6 +5,17 @@ import { useCharacterStore } from '../../store/characterStore';
 import { useProjectStore } from '../../store/projectStore';
 import * as ipc from '../../lib/ipc';
 import AudioPlayer from './AudioPlayer';
+import { Button } from '../ui/button';
+import { Badge } from '../ui/badge';
+import { Input } from '../ui/input';
+import { Card } from '../ui/card';
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '../ui/select';
 import type { ScriptLine, AudioFragment } from '../../types';
 
 interface ScriptLineProps {
@@ -26,10 +37,8 @@ export default function ScriptLineComponent({ line, index }: ScriptLineProps) {
         const character = characters.find((c) => c.id === line.character_id);
         setGenerating(true);
         try {
-            // Auto-save script before TTS to ensure line_id exists in DB
             const { saveScript } = useScriptStore.getState();
             await saveScript();
-
 
             const apiKey = await ipc.loadApiKey('dashscope');
             const fragment = await ipc.generateTts(
@@ -45,7 +54,6 @@ export default function ScriptLineComponent({ line, index }: ScriptLineProps) {
                 apiKey ?? '',
             );
             setAudioFragment(fragment);
-            // Update audio_fragments in project store so ExportPanel sees it
             const store = useProjectStore.getState();
             if (store.currentProject) {
                 const existing = store.currentProject.audio_fragments.filter(
@@ -84,57 +92,58 @@ export default function ScriptLineComponent({ line, index }: ScriptLineProps) {
     };
 
     const characterName = characters.find((c) => c.id === line.character_id)?.name;
+    // Use a sentinel value for "unassigned" since Select doesn't support empty string well
+    const UNASSIGNED = '__unassigned__';
 
     return (
-        <div
-            className="flex items-start gap-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3 group"
+        <Card
+            className="flex-row items-start gap-2 p-3 group"
             draggable
             onDragStart={handleDragStart}
             onDragOver={handleDragOver}
             onDrop={handleDrop}
         >
-            {/* Drag handle */}
-            <div className="cursor-grab pt-2 text-gray-400 hover:text-gray-600">
+            <div className="cursor-grab pt-2 text-muted-foreground hover:text-foreground">
                 <GripVertical className="h-4 w-4" />
             </div>
 
-            {/* Line number */}
-            <span className="pt-2 text-xs text-gray-400 w-6 text-right shrink-0">{index + 1}</span>
+            <span className="pt-2 text-xs text-muted-foreground w-6 text-right shrink-0">{index + 1}</span>
 
-            {/* Content area */}
             <div className="flex-1 space-y-2">
                 <textarea
-                    className="w-full rounded-lg border border-gray-200 dark:border-gray-600 px-3 py-2 text-sm dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y min-h-[40px]"
+                    className="w-full rounded-lg border border-input bg-transparent px-3 py-2 text-sm focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none resize-y min-h-[40px] dark:bg-input/30"
                     value={line.text}
                     onChange={(e) => updateLine(line.id, e.target.value)}
                     placeholder="输入台词..."
                 />
-                <div className="flex items-center gap-3">
-                    {/* Character dropdown */}
-                    <select
-                        className="rounded-lg border border-gray-200 dark:border-gray-600 px-2 py-1 text-xs dark:bg-gray-900"
-                        value={line.character_id ?? ''}
-                        onChange={(e) => assignCharacter(line.id, e.target.value)}
+                <div className="flex items-center gap-3 flex-wrap">
+                    <Select
+                        value={line.character_id ?? UNASSIGNED}
+                        onValueChange={(v) => assignCharacter(line.id, v === UNASSIGNED ? '' : v)}
                     >
-                        <option value="">未分配角色</option>
-                        {characters.map((c) => (
-                            <option key={c.id} value={c.id}>{c.name}</option>
-                        ))}
-                    </select>
+                        <SelectTrigger size="sm">
+                            <SelectValue placeholder="未分配角色" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value={UNASSIGNED}>未分配角色</SelectItem>
+                            {characters.map((c) => (
+                                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
 
                     {characterName && (
-                        <span className="text-xs text-blue-500">{characterName}</span>
+                        <Badge variant="secondary">{characterName}</Badge>
                     )}
 
-                    {/* TTS status + generate button */}
                     {audioFragment ? (
-                        <span className="text-xs text-green-500">✓ 已生成</span>
+                        <Badge variant="outline" className="text-green-600 border-green-300">✓ 已生成</Badge>
                     ) : (
-                        <span className="text-xs text-gray-400">未生成</span>
+                        <Badge variant="outline" className="text-muted-foreground">未生成</Badge>
                     )}
 
-                    <button
-                        className="flex items-center gap-1 rounded-lg bg-teal-600 px-2 py-1 text-xs text-white hover:bg-teal-700 disabled:opacity-50"
+                    <Button
+                        size="xs"
                         onClick={handleGenerateTts}
                         disabled={generating || !line.text.trim()}
                     >
@@ -144,17 +153,15 @@ export default function ScriptLineComponent({ line, index }: ScriptLineProps) {
                             <Volume2 className="h-3 w-3" />
                         )}
                         {generating ? '生成中' : '生成语音'}
-                    </button>
+                    </Button>
 
-                    {/* Audio player */}
                     {audioFragment && <AudioPlayer filePath={audioFragment.file_path} />}
 
-                    {/* Per-line gap control */}
-                    <span className="inline-flex items-center gap-1 text-xs text-gray-400">
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                         停顿
-                        <input
+                        <Input
                             type="number"
-                            className="w-14 rounded border border-gray-300 dark:border-gray-600 px-1 py-0.5 text-xs text-center dark:bg-gray-900"
+                            className="w-24 h-6 text-xs text-center"
                             value={line.gap_after_ms}
                             onChange={(e) => setGap(line.id, parseInt(e.target.value) || 0)}
                             min={0}
@@ -166,14 +173,15 @@ export default function ScriptLineComponent({ line, index }: ScriptLineProps) {
                 </div>
             </div>
 
-            {/* Delete button */}
-            <button
-                className="pt-2 opacity-0 group-hover:opacity-100 transition text-gray-400 hover:text-red-500"
+            <Button
+                variant="ghost"
+                size="icon-sm"
+                className="pt-2 opacity-0 group-hover:opacity-100 transition hover:text-destructive"
                 onClick={() => deleteLine(line.id)}
                 aria-label="Delete line"
             >
                 <Trash2 className="h-4 w-4" />
-            </button>
-        </div>
+            </Button>
+        </Card>
     );
 }

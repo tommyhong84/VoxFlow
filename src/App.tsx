@@ -8,9 +8,23 @@ import CharacterPanel from './components/character/CharacterPanel';
 import ScriptEditor from './components/editor/ScriptEditor';
 import SettingsDialog from './components/settings/SettingsDialog';
 import ExportPanel from './components/editor/ExportPanel';
+import { Button } from './components/ui/button';
+import { Tabs, TabsList, TabsTrigger } from './components/ui/tabs';
+import {
+    Tooltip,
+    TooltipContent,
+    TooltipProvider,
+    TooltipTrigger,
+} from './components/ui/tooltip';
 import './App.css';
 
 type Tab = 'editor' | 'characters' | 'export';
+
+const tabLabels: Record<Tab, string> = {
+    editor: '剧本编辑',
+    characters: '角色管理',
+    export: '导出',
+};
 
 function App() {
     const { currentProject, loadProject } = useProjectStore();
@@ -48,82 +62,94 @@ function App() {
 
     if (!currentProject) {
         return (
-            <div className="min-h-screen">
-                <div className="fixed top-4 right-4 z-10 flex items-center gap-1">
-                    <button
-                        className="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition"
-                        onClick={() => setShowNewProject(true)}
-                        aria-label="新建项目"
-                        title="新建项目"
-                    >
-                        <Plus className="h-5 w-5" />
-                    </button>
-                    <button
-                        className="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition"
-                        onClick={() => setSettingsOpen(true)}
-                        aria-label="Settings"
-                    >
-                        <Settings className="h-5 w-5" />
-                    </button>
+            <TooltipProvider>
+                <div className="min-h-screen">
+                    <div className="fixed top-4 right-4 z-10 flex items-center gap-1">
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => setShowNewProject(true)}
+                                    aria-label="新建项目"
+                                >
+                                    <Plus className="h-5 w-5" />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>新建项目</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => setSettingsOpen(true)}
+                                    aria-label="设置"
+                                >
+                                    <Settings className="h-5 w-5" />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>设置</TooltipContent>
+                        </Tooltip>
+                    </div>
+                    <ProjectList
+                        onSelectProject={handleSelectProject}
+                        showInput={showNewProject}
+                        onShowInput={setShowNewProject}
+                    />
+                    {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
                 </div>
-                <ProjectList
-                    onSelectProject={handleSelectProject}
-                    showInput={showNewProject}
-                    onShowInput={setShowNewProject}
-                />
-                {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
-            </div>
+            </TooltipProvider>
         );
     }
 
     return (
-        <div className="min-h-screen flex flex-col">
-            {/* Header */}
-            <header className="flex items-center justify-between border-b border-gray-200 dark:border-gray-700 px-6 py-3">
-                <div className="flex items-center gap-4">
-                    <button
-                        className="text-sm text-blue-600 hover:underline"
-                        onClick={handleBack}
-                    >
-                        ← 返回项目列表
-                    </button>
-                    <h1 className="text-lg font-semibold">{currentProject.project.name}</h1>
-                </div>
-                <div className="flex items-center gap-2">
-                    <nav className="flex gap-1 rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
-                        {(['editor', 'characters', 'export'] as Tab[]).map((tab) => (
-                            <button
-                                key={tab}
-                                className={`px-3 py-1.5 text-sm rounded-md transition ${
-                                    activeTab === tab
-                                        ? 'bg-white dark:bg-gray-700 shadow-sm font-medium'
-                                        : 'hover:bg-gray-200 dark:hover:bg-gray-600'
-                                }`}
-                                onClick={() => setActiveTab(tab)}
-                            >
-                                {tab === 'editor' ? '剧本编辑' : tab === 'characters' ? '角色管理' : '导出'}
-                            </button>
-                        ))}
-                    </nav>
-                    <button
-                        className="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition"
-                        onClick={() => setSettingsOpen(true)}
-                        aria-label="Settings"
-                    >
-                        <Settings className="h-5 w-5" />
-                    </button>
-                </div>
-            </header>
+        <TooltipProvider>
+            <div className="min-h-screen flex flex-col">
+                {/* Header */}
+                <header className="flex items-center justify-between border-b border-gray-200 dark:border-gray-700 px-6 py-3">
+                    <div className="flex items-center gap-4">
+                        <Button variant="link" size="sm" onClick={handleBack}>
+                            ← 返回项目列表
+                        </Button>
+                        <h1 className="text-lg font-semibold">{currentProject.project.name}</h1>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as Tab)}>
+                            <TabsList>
+                                {(Object.keys(tabLabels) as Tab[]).map((tab) => (
+                                    <TabsTrigger key={tab} value={tab}>
+                                        {tabLabels[tab]}
+                                    </TabsTrigger>
+                                ))}
+                            </TabsList>
+                        </Tabs>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => setSettingsOpen(true)}
+                                    aria-label="设置"
+                                >
+                                    <Settings className="h-5 w-5" />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>设置</TooltipContent>
+                        </Tooltip>
+                    </div>
+                </header>
 
-            {/* Content */}
-            <main className="flex-1 overflow-auto">
-                {activeTab === 'editor' && <ScriptEditor />}
-                {activeTab === 'characters' && <CharacterPanel />}
-                {activeTab === 'export' && <ExportPanel />}
-            </main>
+                {/* Content */}
+                <main className="flex-1 overflow-auto">
+                    {activeTab === 'editor' && <ScriptEditor />}
+                    {activeTab === 'characters' && <CharacterPanel />}
+                    {activeTab === 'export' && <ExportPanel />}
+                </main>
 
-            {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
-        </div>
+                {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+            </div>
+        </TooltipProvider>
     );
 }
 
