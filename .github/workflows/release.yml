@@ -6,7 +6,32 @@ on:
       - 'v*'
 
 jobs:
-  release:
+  create-release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+    outputs:
+      release_id: ${{ steps.create-release.outputs.releaseId }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create Release
+        id: create-release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'VoxFlow AI v__VERSION__'
+          releaseBody: |
+            See the assets below to download this version of VoxFlow AI.
+          releaseDraft: true
+          prerelease: false
+
+  build-tauri:
+    needs: create-release
     permissions:
       contents: write
 
@@ -14,9 +39,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest 
+          - platform: macos-latest
             args: '--target universal-apple-darwin'
-          - platform: ubuntu-22.04 
+          - platform: ubuntu-22.04
             args: ''
           - platform: windows-latest
             args: ''
@@ -67,15 +92,10 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
-      - name: Build and release
+      - name: Build and upload
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'VoxFlow AI v__VERSION__'
-          releaseBody: |
-            See the assets below to download this version of VoxFlow AI.
-          releaseDraft: true
-          prerelease: false
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
