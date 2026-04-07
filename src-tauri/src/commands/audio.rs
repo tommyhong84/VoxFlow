@@ -7,15 +7,90 @@ use tauri::Manager;
 use crate::core::db::Database;
 use crate::core::error::AppError;
 use crate::core::models::MixProgress;
-use log::error;
 
 // --- Audio playback via rodio on a dedicated thread ---
 
-use cpal::traits::HostTrait;
+use rodio::Source;
+use std::io::Read;
+
+/// A custom rodio Source that reads raw PCM s16le data from a pipe (FFmpeg stdout).
+struct PcmSource<R: Read> {
+    reader: R,
+    sample_rate: u32,
+    channels: u16,
+    // Two-sample buffer for stereo interleaving
+    pending: Option<i16>,
+}
+
+impl<R: Read> PcmSource<R> {
+    fn new(reader: R, sample_rate: u32, channels: u16) -> Self {
+        Self {
+            reader,
+            sample_rate,
+            channels,
+            pending: None,
+        }
+    }
+}
+
+impl<R: Read> Iterator for PcmSource<R> {
+    type Item = i16;
+
+    fn next(&mut self) -> Option<i16> {
+        if self.channels == 1 {
+            let mut buf = [0u8; 2];
+            match self.reader.read_exact(&mut buf) {
+                Ok(()) => Some(i16::from_le_bytes(buf)),
+                Err(_) => None,
+            }
+        } else {
+            // Stereo: interleave left/right samples
+            if let Some(sample) = self.pending.take() {
+                return Some(sample);
+            }
+            let mut buf = [0u8; 2];
+            match self.reader.read_exact(&mut buf) {
+                Ok(()) => {
+                    let left = i16::from_le_bytes(buf);
+                    // Read right channel
+                    match self.reader.read_exact(&mut buf) {
+                        Ok(()) => {
+                            let right = i16::from_le_bytes(buf);
+                            self.pending = Some(right);
+                            Some(left)
+                        }
+                        Err(_) => Some(left),
+                    }
+                }
+                Err(_) => None,
+            }
+        }
+    }
+}
+
+impl<R: Read> Source for PcmSource<R> {
+    fn current_frame_len(&self) -> Option<usize> {
+        // Unknown length for a pipe
+        None
+    }
+
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        None
+    }
+}
 
 enum AudioCommand {
     Play(String, mpsc::Sender<Result<(), String>>, Option<tauri::AppHandle>),
     Stop,
+    SetVolume(f32),
     Shutdown,
 }
 
@@ -32,44 +107,68 @@ impl AudioPlayer {
         std::thread::spawn(move || {
             let mut current_sink: Option<std::sync::Arc<rodio::Sink>> = None;
             let mut current_stream: Option<rodio::OutputStream> = None;
+            let mut current_child: Option<std::process::Child> = None;
 
             while let Ok(cmd) = rx.recv() {
                 match cmd {
                     AudioCommand::Play(path, reply, app_handle) => {
+                        // Stop any currently playing audio
                         if let Some(sink) = current_sink.take() {
                             sink.stop();
                         }
                         current_stream.take();
+                        if let Some(mut child) = current_child.take() {
+                            let _ = child.kill();
+                        }
 
-                        let result = (|| -> Result<std::sync::Arc<rodio::Sink>, String> {
-                            let host = cpal::default_host();
-                            let device = host
-                                .default_output_device()
-                                .ok_or("No default audio output device found")?;
-
+                        let result = (|| -> Result<(std::sync::Arc<rodio::Sink>, std::process::Child), String> {
                             let (stream, stream_handle) =
-                                rodio::OutputStream::try_from_device(&device)
-                                    .map_err(|e| format!("Failed to open audio device: {}", e))?;
+                                rodio::OutputStream::try_default()
+                                    .map_err(|e| format!("Failed to open default audio output: {}", e))?;
 
                             let sink = rodio::Sink::try_new(&stream_handle)
                                 .map_err(|e| format!("Failed to create audio sink: {}", e))?;
 
-                            let file = std::fs::File::open(&path)
-                                .map_err(|e| format!("Failed to open file {}: {}", path, e))?;
+                            // Use FFmpeg to decode any audio format to raw PCM (16-bit signed LE, 44100Hz, stereo)
+                            // then pipe it to rodio for playback. This handles WAV, FLAC, AAC, etc.
+                            let ffmpeg_bin = find_ffmpeg();
+                            let mut child = std::process::Command::new(&ffmpeg_bin)
+                                .args([
+                                    "-i", &path,
+                                    "-f", "s16le",
+                                    "-acodec", "pcm_s16le",
+                                    "-ar", "44100",
+                                    "-ac", "2",
+                                    "-",
+                                ])
+                                .stdin(std::process::Stdio::null())
+                                .stdout(std::process::Stdio::piped())
+                                .stderr(std::process::Stdio::null())
+                                .spawn()
+                                .map_err(|e| {
+                                    if e.kind() == std::io::ErrorKind::NotFound {
+                                        "FFmpeg not found".to_string()
+                                    } else {
+                                        format!("Failed to start FFmpeg: {}", e)
+                                    }
+                                })?;
 
-                            let reader = std::io::BufReader::new(file);
-                            let source = rodio::Decoder::new(reader)
-                                .map_err(|e| format!("Failed to decode audio: {}", e))?;
+                            let stdout = child.stdout.take()
+                                .ok_or("FFmpeg has no stdout")?;
+
+                            // Raw PCM source: 44100Hz, 16-bit signed LE, stereo
+                            let source = PcmSource::new(std::io::BufReader::new(stdout), 44100, 2);
 
                             sink.append(source);
                             let sink = std::sync::Arc::new(sink);
                             current_stream = Some(stream);
-                            Ok(sink)
+                            Ok((sink, child))
                         })();
 
                         match result {
-                            Ok(sink) => {
+                            Ok((sink, child)) => {
                                 current_sink = Some(sink.clone());
+                                current_child = Some(child);
                                 let _ = reply.send(Ok(()));
 
                                 // Spawn a watcher thread that emits audio-finished when done
@@ -90,6 +189,14 @@ impl AudioPlayer {
                             sink.stop();
                         }
                         current_stream.take();
+                        if let Some(mut child) = current_child.take() {
+                            let _ = child.kill();
+                        }
+                    }
+                    AudioCommand::SetVolume(vol) => {
+                        if let Some(ref sink) = current_sink {
+                            sink.set_volume(vol);
+                        }
                     }
                     AudioCommand::Shutdown => break,
                 }
@@ -111,6 +218,10 @@ impl AudioPlayer {
 
     pub fn stop(&self) {
         let _ = self.tx.send(AudioCommand::Stop);
+    }
+
+    pub fn set_volume(&self, volume: f32) {
+        let _ = self.tx.send(AudioCommand::SetVolume(volume.clamp(0.0, 1.0)));
     }
 }
 
@@ -137,10 +248,20 @@ pub fn stop_audio(
     Ok(())
 }
 
+#[tauri::command]
+pub fn set_audio_volume(
+    state: tauri::State<'_, AudioPlayer>,
+    volume: f32,
+) -> Result<(), AppError> {
+    state.set_volume(volume);
+    Ok(())
+}
+
 /// Detect which script lines are missing audio fragments.
 ///
 /// Pure function: takes script line IDs and audio fragment line IDs,
 /// returns the IDs of script lines that have no corresponding audio fragment.
+#[allow(dead_code)]
 pub fn detect_missing_audio(
     script_line_ids: &[String],
     audio_fragment_line_ids: &[String],
@@ -280,6 +401,11 @@ pub async fn export_audio_mix(
 
     let mut audio_paths: Vec<String> = Vec::new();
     let mut gaps_ms: Vec<i32> = Vec::new();
+    let total_clips = script_lines
+        .iter()
+        .filter(|line| frag_map.contains_key(line.id.as_str()))
+        .count();
+    let mut processed = 0usize;
 
     for line in &script_lines {
         if let Some(frag) = frag_map.get(line.id.as_str()) {
@@ -292,6 +418,19 @@ pub async fn export_audio_mix(
             }
             audio_paths.push(frag.file_path.clone());
             gaps_ms.push(line.gap_after_ms);
+            processed += 1;
+
+            // Emit per-clip verification progress (0-15%)
+            if processed % 5 == 0 || processed == total_clips {
+                let pct = (processed as f64 / total_clips as f64) * 15.0;
+                let _ = app.emit(
+                    "mix-progress",
+                    MixProgress {
+                        percent: pct as f32,
+                        stage: format!("正在校验音频 {}/{}", processed, total_clips),
+                    },
+                );
+            }
         }
     }
 
@@ -321,7 +460,7 @@ pub async fn export_audio_mix(
         "mix-progress",
         MixProgress {
             percent: 0.0,
-            stage: "Preparing".to_string(),
+            stage: "正在准备混音".to_string(),
         },
     );
 
@@ -337,8 +476,8 @@ pub async fn export_audio_mix(
     let _ = app.emit(
         "mix-progress",
         MixProgress {
-            percent: 10.0,
-            stage: "Starting FFmpeg".to_string(),
+            percent: 20.0,
+            stage: "正在启动 FFmpeg".to_string(),
         },
     );
 
@@ -373,7 +512,7 @@ pub async fn export_audio_mix(
         "mix-progress",
         MixProgress {
             percent: 100.0,
-            stage: "Complete".to_string(),
+            stage: "混音完成".to_string(),
         },
     );
 

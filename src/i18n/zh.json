@@ -8,7 +8,11 @@
       "editor": "剧本编辑",
       "characters": "角色管理",
       "export": "导出"
-    }
+    },
+    "theme": "切换主题",
+    "themeLight": "浅色",
+    "themeDark": "深色",
+    "themeSystem": "跟随系统"
   },
   "project": {
     "title": "VoxFlow 项目",
@@ -21,6 +25,15 @@
   "editor": {
     "outlineLabel": "大纲输入",
     "outlinePlaceholder": "输入有声书大纲，AI 将为你生成剧本...",
+    "outlineExpand": "展开大纲",
+    "outlineCollapse": "收起大纲",
+    "undo": "撤销",
+    "redo": "重做",
+    "confirmOverwriteTitle": "覆盖现有剧本",
+    "confirmOverwrite": "已有 {{textCount}} 行剧本（含 {{audioCount}} 条已生成音频）将被完全替换",
+    "confirmOverwriteBtn": "确认覆盖",
+    "cancel": "取消",
+    "irreversibleWarning": "此操作不可撤销。",
     "generating": "生成中...",
     "generate": "生成剧本",
     "save": "保存剧本",
@@ -39,7 +52,8 @@
     "play": "播放",
     "pause": "暂停",
     "generateAllTts": "生成全部语音 ({{count}} 行)",
-    "batchTtsRunning": "生成中 ({{current}}/{{total}})"
+    "batchTtsRunning": "生成中 ({{current}}/{{total}})",
+    "instructionsPlaceholder": "导演指令，如：语速较快、带有悲伤情绪"
   },
   "character": {
     "title": "角色管理",
@@ -53,7 +67,10 @@
     "save": "保存",
     "cancel": "取消",
     "empty": "暂无角色，点击\"新建角色\"添加",
-    "confirmDelete": "删除角色后，关联的剧本行将变为未分配状态。确定删除？"
+    "confirmDelete": "删除角色后，关联的剧本行将变为未分配状态。确定删除？",
+    "import": "导入角色",
+    "importEmpty": "没有其他项目的角色可导入",
+    "importSelected": "导入 {{count}} 个角色"
   },
   "export": {
     "title": "导出有声书",
@@ -65,6 +82,7 @@
     "bgmPlaceholder": "BGM 文件路径（可选）",
     "browse": "浏览",
     "bgmVolume": "BGM 音量 ({{percent}}%)",
+    "selectBgm": "选择背景音乐文件",
     "outputLabel": "输出文件名",
     "exportSuccess": "导出成功！",
     "exportFailed": "导出失败",

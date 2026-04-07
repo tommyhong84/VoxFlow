@@ -70,7 +70,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         try {
             return await ipc.loadApiKey(service);
         } catch (e) {
-            console.error('Failed to load API key:', e);
+            useToastStore.getState().addToast('加载 API Key 失败');
             return null;
         }
     },

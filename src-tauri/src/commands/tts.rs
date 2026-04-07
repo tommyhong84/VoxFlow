@@ -6,7 +6,7 @@ use tauri::Manager;
 use crate::core::db::Database;
 use crate::core::error::AppError;
 use crate::core::models::{AudioFragment, TtsBatchProgress, VoiceConfig};
-use log::{debug, error, info};
+use log::debug;
 
 /// Build the audio file path for a given project and line.
 /// Returns `{app_data_dir}/projects/{project_id}/audio/{line_id}.mp3`
@@ -30,6 +30,7 @@ pub async fn generate_tts(
     line_id: String,
     text: String,
     voice_config: VoiceConfig,
+    instructions: Option<String>,
     api_key: String,
 ) -> Result<AudioFragment, AppError> {
     let app_data_dir = app
@@ -46,7 +47,7 @@ pub async fn generate_tts(
     }
 
     let audio_bytes =
-        call_dashscope_tts(&text, &voice_config, &api_key).await?;
+        call_dashscope_tts(&text, &voice_config, instructions.as_deref(), &api_key).await?;
 
     std::fs::write(&audio_path, &audio_bytes).map_err(|e| {
         AppError::FileSystem(format!("Failed to write audio file: {}", e))
@@ -141,27 +142,38 @@ fn get_audio_duration(path: &std::path::Path) -> Option<i64> {
 ///
 /// voice_config.tts_model 指定模型名（如 "qwen3-tts-flash"、"cosyvoice-v3-flash"）
 /// voice_config.voice_name 指定音色（如 "Cherry"、"longanyang"）
+/// instructions 可选的导演指令，用于控制情绪、语速、语调等。如果提供，会自动切换到
+/// qwen3-tts-instruct-flash 模型。
 async fn call_dashscope_tts(
     text: &str,
     voice_config: &VoiceConfig,
+    instructions: Option<&str>,
     api_key: &str,
 ) -> Result<Vec<u8>, AppError> {
     use reqwest::header::CONTENT_TYPE;
     use serde_json::json;
 
-    let model = if voice_config.tts_model.is_empty() {
+    let has_instructions = instructions.map(|i| !i.trim().is_empty()).unwrap_or(false);
+
+    let model = if has_instructions {
+        "qwen3-tts-instruct-flash"
+    } else if voice_config.tts_model.is_empty() {
         "qwen3-tts-flash"
     } else {
         &voice_config.tts_model
     };
 
+    let mut input = serde_json::Map::new();
+    input.insert("text".to_string(), json!(text));
+    input.insert("voice".to_string(), json!(voice_config.voice_name));
+    if has_instructions {
+        input.insert("instructions".to_string(), json!(instructions.unwrap()));
+        input.insert("optimize_instructions".to_string(), json!(true));
+    }
+
     let body = json!({
         "model": model,
-        "input": {
-            "text": text, 
-            "voice": voice_config.voice_name,
-            // "language_type": "Chinese",
-        }
+        "input": input
     });
 
     // 使用 debug! 宏，只有在设置 RUST_LOG=debug 时才会显示，避免生产环境日志过多
@@ -257,10 +269,10 @@ pub async fn generate_all_tts(
         })
         .collect();
 
-    let missing: Vec<(String, String, Option<String>)> = script_lines
+    let missing: Vec<(String, String, Option<String>, String)> = script_lines
         .iter()
         .filter(|l| !existing_line_ids.contains(&l.id) && !l.text.trim().is_empty())
-        .map(|l| (l.id.clone(), l.text.clone(), l.character_id.clone()))
+        .map(|l| (l.id.clone(), l.text.clone(), l.character_id.clone(), l.instructions.clone()))
         .collect();
 
     if missing.is_empty() {
@@ -281,7 +293,7 @@ pub async fn generate_all_tts(
     for chunk in missing.chunks(MAX_CONCURRENT) {
         let mut handles = Vec::with_capacity(chunk.len());
 
-        for (line_id, text, character_id) in chunk {
+        for (line_id, text, character_id, instructions) in chunk {
             let app_h = app.clone();
             let proj_id = project_id.clone();
             let key = api_key.clone();
@@ -289,6 +301,7 @@ pub async fn generate_all_tts(
             let id = line_id.clone();
             let txt = text.clone();
             let char_id = character_id.clone();
+            let instr = instructions.clone();
             let cfg = char_id.and_then(|cid| char_map.get(&cid).cloned()).unwrap_or_else(|| VoiceConfig {
                 voice_name: String::new(),
                 tts_model: String::new(),
@@ -309,7 +322,7 @@ pub async fn generate_all_tts(
                     pitch: cfg.pitch,
                 };
 
-                let result = call_dashscope_tts(&txt, &vc, &key).await;
+                let result = call_dashscope_tts(&txt, &vc, if instr.is_empty() { None } else { Some(&instr) }, &key).await;
 
                 match result {
                     Ok(audio_bytes) => {

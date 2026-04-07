@@ -8,7 +8,11 @@
       "editor": "Script Editor",
       "characters": "Characters",
       "export": "Export"
-    }
+    },
+    "theme": "Toggle Theme",
+    "themeLight": "Light",
+    "themeDark": "Dark",
+    "themeSystem": "System"
   },
   "project": {
     "title": "VoxFlow Projects",
@@ -21,6 +25,15 @@
   "editor": {
     "outlineLabel": "Outline",
     "outlinePlaceholder": "Enter an audiobook outline, AI will generate the script for you...",
+    "outlineExpand": "Expand Outline",
+    "outlineCollapse": "Collapse Outline",
+    "undo": "Undo",
+    "redo": "Redo",
+    "confirmOverwriteTitle": "Overwrite Existing Script",
+    "confirmOverwrite": "{{textCount}} script lines (with {{audioCount}} generated audio clips) will be completely replaced",
+    "confirmOverwriteBtn": "Confirm Overwrite",
+    "cancel": "Cancel",
+    "irreversibleWarning": "This action cannot be undone.",
     "generating": "Generating...",
     "generate": "Generate Script",
     "save": "Save Script",
@@ -39,7 +52,8 @@
     "play": "Play",
     "pause": "Pause",
     "generateAllTts": "Generate All Voice ({{count}} lines)",
-    "batchTtsRunning": "Generating ({{current}}/{{total}})"
+    "batchTtsRunning": "Generating ({{current}}/{{total}})",
+    "instructionsPlaceholder": "Director instructions, e.g. faster pace, with sadness"
   },
   "character": {
     "title": "Characters",
@@ -53,7 +67,10 @@
     "save": "Save",
     "cancel": "Cancel",
     "empty": "No characters yet. Click \"New Character\" to add one.",
-    "confirmDelete": "Deleting a character will unassign related script lines. Are you sure?"
+    "confirmDelete": "Deleting a character will unassign related script lines. Are you sure?",
+    "import": "Import Characters",
+    "importEmpty": "No characters from other projects to import",
+    "importSelected": "Import {{count}} characters"
   },
   "export": {
     "title": "Export Audiobook",
@@ -65,6 +82,7 @@
     "bgmPlaceholder": "BGM file path (optional)",
     "browse": "Browse",
     "bgmVolume": "BGM Volume ({{percent}}%)",
+    "selectBgm": "Select background music file",
     "outputLabel": "Output Filename",
     "exportSuccess": "Export successful!",
     "exportFailed": "Export failed",

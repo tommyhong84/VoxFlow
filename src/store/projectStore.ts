@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import * as ipc from '../lib/ipc';
+import { useToastStore } from './toastStore';
 import type { Project, ProjectDetail } from '../types';
 
 interface ProjectStore {
@@ -78,7 +79,7 @@ export const useProjectStore = create<ProjectStore>((set) => ({
                     : state.currentProject,
             }));
         } catch (e) {
-            console.error('Failed to save outline:', e);
+            useToastStore.getState().addToast('保存大纲失败');
         }
     },
 }));

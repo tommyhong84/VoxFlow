@@ -36,6 +36,7 @@ pub struct ScriptLine {
     pub text: String,
     pub character_id: Option<String>,
     pub gap_after_ms: i32,
+    pub instructions: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,21 +54,6 @@ pub struct VoiceConfig {
     pub tts_model: String,
     pub speed: f32,
     pub pitch: f32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmConfig {
-    pub api_endpoint: String,
-    pub api_key: String,
-    pub model: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MixConfig {
-    pub fragment_paths: Vec<String>,
-    pub bgm_path: Option<String>,
-    pub bgm_volume: f32,
-    pub output_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,4 +102,6 @@ pub struct LlmScriptResponse {
 pub struct LlmScriptLine {
     pub text: String,
     pub character: Option<String>,
+    pub instructions: Option<String>,
+    pub gap_ms: Option<u32>,
 }

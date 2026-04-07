@@ -101,6 +101,10 @@ impl Database {
                 2,
                 "ALTER TABLE projects ADD COLUMN outline TEXT NOT NULL DEFAULT '';",
             ),
+            (
+                3,
+                "ALTER TABLE script_lines ADD COLUMN instructions TEXT NOT NULL DEFAULT '';",
+            ),
         ];
 
         for (version, sql) in migrations {
@@ -297,6 +301,60 @@ impl Database {
         Ok(characters)
     }
 
+    /// List all characters across all projects, grouped by (project_id, characters).
+    pub fn list_all_project_characters(&self) -> Result<Vec<(String, Vec<Character>)>, AppError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, project_id, name, tts_model, voice_name, speed, pitch FROM characters ORDER BY project_id, name")
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+        let characters = stmt
+            .query_map([], |row| {
+                Ok(Character {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    name: row.get(2)?,
+                    tts_model: row.get(3)?,
+                    voice_name: row.get(4)?,
+                    speed: row.get(5)?,
+                    pitch: row.get(6)?,
+                })
+            })
+            .map_err(|e| AppError::Database(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+        // Group by project_id
+        let mut grouped: std::collections::HashMap<String, Vec<Character>> =
+            std::collections::HashMap::new();
+        for c in characters {
+            grouped.entry(c.project_id.clone()).or_default().push(c);
+        }
+
+        Ok(grouped.into_iter().collect())
+    }
+
+    /// Get a single character by ID.
+    pub fn get_character_by_id(&self, character_id: &str) -> Result<Character, AppError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, project_id, name, tts_model, voice_name, speed, pitch FROM characters WHERE id = ?1")
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+        stmt.query_row(rusqlite::params![character_id], |row| {
+            Ok(Character {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                name: row.get(2)?,
+                tts_model: row.get(3)?,
+                voice_name: row.get(4)?,
+                speed: row.get(5)?,
+                pitch: row.get(6)?,
+            })
+        })
+        .map_err(|e| AppError::Database(e.to_string()))
+    }
+
     // ---- Script Line operations ----
 
     /// Save script lines for a project using upsert to avoid cascade-deleting audio fragments.
@@ -331,8 +389,8 @@ impl Database {
         // Upsert each line
         for line in lines {
             tx.execute(
-                "INSERT INTO script_lines (id, project_id, line_order, text, character_id, gap_after_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "INSERT INTO script_lines (id, project_id, line_order, text, character_id, gap_after_ms, instructions)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT(id) DO UPDATE SET
                    line_order = excluded.line_order,
                    text = excluded.text,
@@ -341,8 +399,9 @@ impl Database {
                      ELSE script_lines.character_id
                    END,
                    gap_after_ms = excluded.gap_after_ms,
+                   instructions = excluded.instructions,
                    updated_at = datetime('now')",
-                rusqlite::params![line.id, project_id, line.line_order, line.text, line.character_id, line.gap_after_ms],
+                rusqlite::params![line.id, project_id, line.line_order, line.text, line.character_id, line.gap_after_ms, line.instructions],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
         }
@@ -357,7 +416,7 @@ impl Database {
     pub fn load_script(&self, project_id: &str) -> Result<Vec<ScriptLine>, AppError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, project_id, line_order, text, character_id, gap_after_ms FROM script_lines WHERE project_id = ?1 ORDER BY line_order ASC")
+            .prepare("SELECT id, project_id, line_order, text, character_id, gap_after_ms, instructions FROM script_lines WHERE project_id = ?1 ORDER BY line_order ASC")
             .map_err(|e| AppError::Database(e.to_string()))?;
 
         let lines = stmt
@@ -369,6 +428,7 @@ impl Database {
                     text: row.get(3)?,
                     character_id: row.get(4)?,
                     gap_after_ms: row.get(5)?,
+                    instructions: row.get(6)?,
                 })
             })
             .map_err(|e| AppError::Database(e.to_string()))?
@@ -1076,6 +1136,7 @@ mod tests {
             text: text.to_string(),
             character_id: character_id.map(|s| s.to_string()),
             gap_after_ms: 500,
+            instructions: String::new(),
         }
     }
 

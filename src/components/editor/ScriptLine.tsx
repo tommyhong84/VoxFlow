@@ -27,7 +27,7 @@ interface ScriptLineProps {
 
 export default function ScriptLineComponent({ line, index }: ScriptLineProps) {
     const { t } = useTranslation();
-    const { updateLine, assignCharacter, deleteLine, reorderLines, setGap } = useScriptStore();
+    const { updateLine, assignCharacter, deleteLine, reorderLines, setGap, setInstructions } = useScriptStore();
     const { characters } = useCharacterStore();
     const currentProject = useProjectStore((s) => s.currentProject);
     const [generating, setGenerating] = useState(false);
@@ -68,6 +68,7 @@ export default function ScriptLineComponent({ line, index }: ScriptLineProps) {
                     pitch: character?.pitch ?? 1.0,
                 },
                 apiKey ?? '',
+                line.instructions || undefined,
             );
             setAudioFragment(fragment);
             const store = useProjectStore.getState();
@@ -133,6 +134,15 @@ export default function ScriptLineComponent({ line, index }: ScriptLineProps) {
                     onChange={(e) => updateLine(line.id, e.target.value)}
                     placeholder={t('editor.linePlaceholder')}
                 />
+                {line.instructions !== undefined && (
+                    <input
+                        type="text"
+                        className="w-full rounded-md border border-purple-300/50 bg-purple-50/30 dark:bg-purple-900/10 px-3 py-1.5 text-xs text-purple-700 dark:text-purple-300 placeholder:text-purple-400/60 dark:placeholder:text-purple-500/40 focus-visible:border-purple-500 focus-visible:ring-2 focus-visible:ring-purple-500/30 outline-none"
+                        value={line.instructions}
+                        onChange={(e) => setInstructions(line.id, e.target.value)}
+                        placeholder={t('editor.instructionsPlaceholder')}
+                    />
+                )}
                 <div className="flex items-center gap-3 flex-wrap">
                     <Select
                         value={line.character_id ?? UNASSIGNED}

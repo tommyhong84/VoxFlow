@@ -65,6 +65,17 @@ export async function listCharacters(projectId: string): Promise<Character[]> {
     return ipcCall<Character[]>('list_characters', { projectId });
 }
 
+export async function listAllProjectCharacters(): Promise<[string, Character[]][]> {
+    return ipcCall<[string, Character[]][]>('list_all_project_characters');
+}
+
+export async function importCharacters(
+    toProjectId: string,
+    characterIds: string[],
+): Promise<Character[]> {
+    return ipcCall<Character[]>('import_characters', { toProjectId, characterIds });
+}
+
 // ---- LLM Script Generation ----
 
 export async function generateScript(
@@ -113,6 +124,7 @@ export async function generateTts(
     text: string,
     voiceConfig: VoiceConfig,
     apiKey: string,
+    instructions?: string,
 ): Promise<AudioFragment> {
     return ipcCall<AudioFragment>('generate_tts', {
         projectId,
@@ -120,6 +132,7 @@ export async function generateTts(
         text,
         voiceConfig,
         apiKey,
+        instructions: instructions || undefined,
     });
 }
 

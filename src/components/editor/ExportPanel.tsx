@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Download, Music, AlertTriangle, CheckCircle, Loader2 } from 'lucide-react';
+import { Download, Music, AlertTriangle, CheckCircle, Loader2, FolderOpen, Play, Pause } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { save } from '@tauri-apps/plugin-dialog';
+import { save, open } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useProjectStore } from '../../store/projectStore';
 import { useScriptStore } from '../../store/scriptStore';
 import * as ipc from '../../lib/ipc';
@@ -20,6 +22,7 @@ export default function ExportPanel() {
     const { lines } = useScriptStore();
     const [bgmPath, setBgmPath] = useState<string | null>(null);
     const [bgmVolume, setBgmVolume] = useState(0.3);
+    const [bgmPlaying, setBgmPlaying] = useState(false);
     const [outputPath, setOutputPath] = useState('');
     const [exporting, setExporting] = useState(false);
     const [progress, setProgress] = useState<MixProgress | null>(null);
@@ -35,6 +38,60 @@ export default function ExportPanel() {
             setOutputPath(`${currentProject.project.name}.mp3`);
         }
     }, [currentProject]);
+
+    // Stop BGM preview on unmount and listen for audio-finished
+    useEffect(() => {
+        const unlisten = listen('audio-finished', () => {
+            setBgmPlaying(false);
+        });
+        return () => {
+            unlisten.then((fn) => fn());
+            if (bgmPlaying) {
+                invoke('stop_audio').catch(() => {});
+            }
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const handleBgmBrowse = async () => {
+        const selected = await open({
+            title: t('export.selectBgm'),
+            multiple: false,
+            filters: [
+                { name: 'Audio Files', extensions: ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac'] },
+            ],
+        });
+        if (selected) {
+            setBgmPath(Array.isArray(selected) ? selected[0] : selected);
+        }
+    };
+
+    const toggleBgmPreview = async () => {
+        if (!bgmPath) return;
+        try {
+            if (bgmPlaying) {
+                await invoke('stop_audio');
+                setBgmPlaying(false);
+            } else {
+                await invoke('play_audio', { filePath: bgmPath });
+                setBgmPlaying(true);
+            }
+        } catch {
+            setBgmPlaying(false);
+        }
+    };
+
+    const handleBgmVolumeChange = async (value: number[]) => {
+        const vol = value[0];
+        setBgmVolume(vol);
+        if (bgmPlaying) {
+            try {
+                await invoke('set_audio_volume', { volume: vol });
+            } catch {
+                // ignore
+            }
+        }
+    };
 
     const handleExport = async () => {
         if (!currentProject || missingLines.length > 0) return;
@@ -70,10 +127,6 @@ export default function ExportPanel() {
         }
     };
 
-    const handleBgmImport = () => {
-        // In a real implementation, this would use Tauri's file dialog
-    };
-
     return (
         <div className="mx-auto max-w-3xl px-6 py-8 space-y-6">
             <h2 className="text-xl font-bold">{t('export.title')}</h2>
@@ -101,14 +154,26 @@ export default function ExportPanel() {
                     </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                    <div className="flex gap-3 items-center">
+                    <div className="flex gap-2 items-center">
                         <Input
                             className="flex-1"
                             placeholder={t('export.bgmPlaceholder')}
                             value={bgmPath ?? ''}
                             onChange={(e) => setBgmPath(e.target.value || null)}
                         />
-                        <Button variant="outline" onClick={handleBgmImport}>{t('export.browse')}</Button>
+                        <Button variant="outline" size="icon" onClick={handleBgmBrowse} title={t('export.browse')}>
+                            <FolderOpen className="h-4 w-4" />
+                        </Button>
+                        {bgmPath && (
+                            <Button
+                                variant="outline"
+                                size="icon"
+                                onClick={toggleBgmPreview}
+                                title={bgmPlaying ? t('editor.pause') : t('editor.play')}
+                            >
+                                {bgmPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                            </Button>
+                        )}
                     </div>
                     {bgmPath && (
                         <div className="space-y-2">
@@ -116,7 +181,7 @@ export default function ExportPanel() {
                             <Slider
                                 min={0} max={1} step={0.05}
                                 value={[bgmVolume]}
-                                onValueChange={([v]) => setBgmVolume(v)}
+                                onValueChange={handleBgmVolumeChange}
                             />
                         </div>
                     )}

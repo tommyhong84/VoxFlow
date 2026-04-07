@@ -3,6 +3,7 @@ import { Play, Pause } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { useToastStore } from '../../store/toastStore';
 import { Button } from '../ui/button';
 
 interface AudioPlayerProps {
@@ -30,7 +31,7 @@ export default function AudioPlayer({ filePath }: AudioPlayerProps) {
                 setPlaying(true);
             }
         } catch (e) {
-            console.error('Audio playback error:', e);
+            useToastStore.getState().addToast('音频播放失败');
             setPlaying(false);
         }
     };

@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { Sparkles, Save, Plus, Volume2, Loader2 } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Sparkles, Save, Plus, Volume2, Loader2, ChevronDown, ChevronUp, Undo2, Redo2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useScriptStore } from '../../store/scriptStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -8,6 +8,7 @@ import { Button } from '../ui/button';
 import { Card, CardContent } from '../ui/card';
 import { Label } from '../ui/label';
 import { Progress } from '../ui/progress';
+import ConfirmDialog from '../ui/confirm-dialog';
 
 export default function ScriptEditor() {
     const { t } = useTranslation();
@@ -18,6 +19,9 @@ export default function ScriptEditor() {
     } = useScriptStore();
     const currentProject = useProjectStore((s) => s.currentProject);
     const [outline, setOutline] = useState('');
+    const [outlineCollapsed, setOutlineCollapsed] = useState(false);
+    const [showOverwriteConfirm, setShowOverwriteConfirm] = useState(false);
+    const [confirmData, setConfirmData] = useState({ textCount: 0, audioCount: 0 });
     const outlineRef = useRef(outline);
 
     // Sync outline from project data
@@ -27,6 +31,30 @@ export default function ScriptEditor() {
     }, [currentProject?.project.id, currentProject?.project.outline]);
 
     outlineRef.current = outline;
+
+    // ---- Keyboard shortcuts for undo/redo ----
+    const handleUndo = useCallback(() => {
+        useScriptStore.temporal.getState().undo();
+    }, []);
+
+    const handleRedo = useCallback(() => {
+        useScriptStore.temporal.getState().redo();
+    }, []);
+
+    useEffect(() => {
+        const handler = (e: KeyboardEvent) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+                e.preventDefault();
+                handleUndo();
+            }
+            if ((e.metaKey || e.ctrlKey) && ((e.key === 'z' && e.shiftKey) || e.key === 'y')) {
+                e.preventDefault();
+                handleRedo();
+            }
+        };
+        window.addEventListener('keydown', handler);
+        return () => window.removeEventListener('keydown', handler);
+    }, [handleUndo, handleRedo]);
 
     // ---- Auto-save outline: debounce 3 seconds ----
     const outlineSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -78,6 +106,17 @@ export default function ScriptEditor() {
 
     const handleGenerate = () => {
         if (!outline.trim() || isGenerating) return;
+
+        // Strong warning if there's existing script content
+        const existingText = lines.filter((l) => l.text.trim()).length;
+        const existingAudio = coveredLineIds.size;
+
+        if (existingText > 0 || existingAudio > 0) {
+            setConfirmData({ textCount: existingText, audioCount: existingAudio });
+            setShowOverwriteConfirm(true);
+            return;
+        }
+
         generateScript(outline.trim());
     };
 
@@ -95,48 +134,67 @@ export default function ScriptEditor() {
             )}
             <Card>
                 <CardContent className="space-y-3">
-                    <Label>{t('editor.outlineLabel')}</Label>
-                    <textarea
-                        className="w-full rounded-lg border border-input bg-transparent px-3 py-2 text-sm focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none resize-y min-h-[80px] dark:bg-input/30"
-                        placeholder={t('editor.outlinePlaceholder')}
-                        value={outline}
-                        onChange={(e) => setOutline(e.target.value)}
-                        disabled={isGenerating}
-                    />
-                    <div className="flex gap-2 flex-wrap items-center">
-                        <Button onClick={handleGenerate} disabled={isGenerating || !outline.trim()}>
-                            <Sparkles className="h-4 w-4" />
-                            {isGenerating ? t('editor.generating') : t('editor.generate')}
+                    <div className="flex items-center justify-between">
+                        <Label>{t('editor.outlineLabel')}</Label>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => setOutlineCollapsed(!outlineCollapsed)}
+                        >
+                            {outlineCollapsed ? (
+                                <ChevronDown className="h-3 w-3 mr-1" />
+                            ) : (
+                                <ChevronUp className="h-3 w-3 mr-1" />
+                            )}
+                            {outlineCollapsed ? t('editor.outlineExpand') : t('editor.outlineCollapse')}
                         </Button>
-                        {isDirty && (
-                            <Button variant="outline" onClick={() => saveScript()}>
-                                <Save className="h-4 w-4" /> {t('editor.save')}
-                            </Button>
-                        )}
-                        {missingTtsCount > 0 && (
-                            <Button
-                                variant="outline"
-                                onClick={() => generateAllTts()}
-                                disabled={isBatchTtsRunning}
-                            >
-                                <Volume2 className="h-4 w-4" />
-                                {isBatchTtsRunning
-                                    ? t('editor.batchTtsRunning', { current: batchTtsProgress?.current ?? 0, total: batchTtsProgress?.total ?? missingTtsCount })
-                                    : t('editor.generateAllTts', { count: missingTtsCount })}
-                            </Button>
-                        )}
-                        {isBatchTtsRunning && batchTtsProgress && (
-                            <div className="flex-1 min-w-[120px] space-y-1">
-                                <Progress
-                                    value={(batchTtsProgress.current / batchTtsProgress.total) * 100}
-                                    className="h-2"
-                                />
-                                <p className="text-xs text-muted-foreground">
-                                    {batchTtsProgress.current} / {batchTtsProgress.total}
-                                </p>
-                            </div>
-                        )}
                     </div>
+                    {!outlineCollapsed && (
+                        <>
+                            <textarea
+                                className="w-full rounded-lg border border-input bg-transparent px-3 py-2 text-sm focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none resize-y min-h-[80px] dark:bg-input/30"
+                                placeholder={t('editor.outlinePlaceholder')}
+                                value={outline}
+                                onChange={(e) => setOutline(e.target.value)}
+                                disabled={isGenerating}
+                            />
+                            <div className="flex gap-2 flex-wrap items-center">
+                                <Button onClick={handleGenerate} disabled={isGenerating || !outline.trim()}>
+                                    <Sparkles className="h-4 w-4" />
+                                    {isGenerating ? t('editor.generating') : t('editor.generate')}
+                                </Button>
+                                {isDirty && (
+                                    <Button variant="outline" onClick={() => saveScript()}>
+                                        <Save className="h-4 w-4" /> {t('editor.save')}
+                                    </Button>
+                                )}
+                                {missingTtsCount > 0 && (
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => generateAllTts()}
+                                        disabled={isBatchTtsRunning}
+                                    >
+                                        <Volume2 className="h-4 w-4" />
+                                        {isBatchTtsRunning
+                                            ? t('editor.batchTtsRunning', { current: batchTtsProgress?.current ?? 0, total: batchTtsProgress?.total ?? missingTtsCount })
+                                            : t('editor.generateAllTts', { count: missingTtsCount })}
+                                    </Button>
+                                )}
+                                {isBatchTtsRunning && batchTtsProgress && (
+                                    <div className="flex-1 min-w-[120px] space-y-1">
+                                        <Progress
+                                            value={(batchTtsProgress.current / batchTtsProgress.total) * 100}
+                                            className="h-2"
+                                        />
+                                        <p className="text-xs text-muted-foreground">
+                                            {batchTtsProgress.current} / {batchTtsProgress.total}
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+                        </>
+                    )}
                 </CardContent>
             </Card>
 
@@ -150,7 +208,29 @@ export default function ScriptEditor() {
             )}
 
             {lines.length > 0 && (
-                <div className="space-y-2">
+                <>
+                    <div className="border-t border-dashed border-border pt-2" />
+                    <div className="flex items-center gap-1 mb-1">
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0"
+                            onClick={() => useScriptStore.temporal.getState().undo()}
+                            title={`${t('editor.undo')} (⌘Z)`}
+                        >
+                            <Undo2 className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0"
+                            onClick={() => useScriptStore.temporal.getState().redo()}
+                            title={`${t('editor.redo')} (⇧⌘Z)`}
+                        >
+                            <Redo2 className="h-3.5 w-3.5" />
+                        </Button>
+                    </div>
+                    <div className="space-y-2">
                     {lines.map((line, index) => (
                         <ScriptLineComponent key={line.id} line={line} index={index} />
                     ))}
@@ -158,6 +238,7 @@ export default function ScriptEditor() {
                         <Plus className="h-4 w-4" /> {t('editor.addLine')}
                     </Button>
                 </div>
+                </>
             )}
 
             {lines.length === 0 && !isGenerating && (
@@ -171,6 +252,20 @@ export default function ScriptEditor() {
                     </Button>
                 </div>
             )}
+
+            <ConfirmDialog
+                open={showOverwriteConfirm}
+                onOpenChange={setShowOverwriteConfirm}
+                title={t('editor.confirmOverwriteTitle')}
+                description={t('editor.confirmOverwrite', {
+                    textCount: confirmData.textCount,
+                    audioCount: confirmData.audioCount,
+                })}
+                confirmText={t('editor.confirmOverwriteBtn')}
+                cancelText={t('editor.cancel')}
+                irreversibleWarning={t('editor.irreversibleWarning')}
+                onConfirm={() => generateScript(outline.trim())}
+            />
         </div>
     );
 }

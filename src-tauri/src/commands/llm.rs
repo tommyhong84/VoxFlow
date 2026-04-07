@@ -46,6 +46,13 @@ pub fn merge_script_lines(
                 uuid::Uuid::new_v4().to_string()
             };
 
+            // Resolve instructions: use old value if present, otherwise use LLM's suggestion
+            let instructions = if !old.instructions.is_empty() {
+                old.instructions.clone()
+            } else {
+                new_line.instructions.clone().unwrap_or_default()
+            };
+
             result.push(ScriptLine {
                 id,
                 project_id: old.project_id.clone(),
@@ -53,16 +60,19 @@ pub fn merge_script_lines(
                 text: text.to_string(),
                 character_id,
                 gap_after_ms: old.gap_after_ms,
+                instructions,
             });
         } else {
             // Brand new line
+            let gap_ms = new_line.gap_ms.unwrap_or(500);
             result.push(ScriptLine {
                 id: uuid::Uuid::new_v4().to_string(),
                 project_id: old_lines.first().map(|l| l.project_id.clone()).unwrap_or_default(),
                 line_order: i as i32,
                 text: text.to_string(),
                 character_id: resolve_character(&new_line.character, characters),
-                gap_after_ms: 500,
+                gap_after_ms: gap_ms as i32,
+                instructions: new_line.instructions.clone().unwrap_or_default(),
             });
         }
     }
@@ -171,10 +181,14 @@ pub async fn generate_script(
                 "content": format!(
                     "你是一个有声书剧本编写助手。根据用户提供的大纲，生成或更新有声书剧本。\
                     \n\n请严格返回 JSON 格式，不要包含任何 markdown 代码块或其他文本：\
-                    \n{{\"lines\":[{{\"text\":\"台词内容\",\"character\":\"角色名或null\"}},...]}}\
+                    \n{{\"lines\":[{{\"text\":\"台词内容\",\"character\":\"角色名或null\",\"instructions\":\"导演指令或null\",\"gap_ms\":停顿毫秒数}},...]}}\
                     \n- 每行一句台词\
                     \n- character 字段可选，表示这句台词由哪个角色说{char_list}\
-                    \n- 如果不确定角色，使用 null",
+                    \n- 如果不确定角色，使用 null\
+                    \n- instructions 字段用于描述这句台词的语音生成指令，如情绪（开心、悲伤、愤怒）、\
+                    语速（较快、缓慢）、语调（上扬、低沉）等。例如：\"语速较快，带有明显的上扬语调，适合介绍时尚产品。\"\
+                    \n- 如果不确定指令，使用 null\
+                    \n- gap_ms 字段表示该台词结束后的停顿时长（毫秒），推荐 500-2000。重要转折或场景切换后可用 1500-3000。对话密集处 300-500。默认 500",
                     char_list = char_list
                 )
             },
@@ -342,13 +356,16 @@ mod tests {
             text: text.to_string(),
             character_id: character_id.map(String::from),
             gap_after_ms: 500,
+            instructions: String::new(),
         }
     }
 
-    fn make_llm_line(text: &str, character: Option<&str>) -> LlmScriptLine {
+    fn make_llm_line(text: &str, character: Option<&str>, instructions: Option<&str>) -> LlmScriptLine {
         LlmScriptLine {
             text: text.to_string(),
             character: character.map(String::from),
+            instructions: instructions.map(String::from),
+            gap_ms: None,
         }
     }
 
@@ -362,8 +379,8 @@ mod tests {
         ];
         let chars = vec![make_char("char-A", "Alice"), make_char("char-B", "Bob")];
         let new = vec![
-            make_llm_line("你好世界", Some("Bob")),  // exact match, should preserve Alice
-            make_llm_line("第二句话", None),
+            make_llm_line("你好世界", Some("Bob"), None),
+            make_llm_line("第二句话", None, None),
         ];
 
         let result = merge_script_lines(&old, &new, &chars);
@@ -377,20 +394,22 @@ mod tests {
     fn test_merge_fuzzy_match() {
         let old = vec![make_old_line("line-1", "今天天气真好", Some("char-A"))];
         let chars = vec![make_char("char-A", "Alice")];
-        let new = vec![make_llm_line("今天天气很好", None)];  // similar but edited
+        let new = vec![make_llm_line("今天天气很好", None, Some("语速缓慢，带有怀念的语气"))];  // similar but edited
 
         let result = merge_script_lines(&old, &new, &chars);
         assert_eq!(result.len(), 1);
         assert_ne!(result[0].id, "line-1");  // new ID because text changed
         assert_eq!(result[0].text, "今天天气很好");
         assert_eq!(result[0].character_id, Some("char-A".to_string()));
+        // LLM provided instructions, new line adopts them
+        assert_eq!(result[0].instructions, "语速缓慢，带有怀念的语气");
     }
 
     #[test]
     fn test_merge_new_lines_gets_character() {
         let old = vec![];
         let chars = vec![make_char("char-A", "Alice"), make_char("char-B", "Bob")];
-        let new = vec![make_llm_line("新台词", Some("Bob"))];
+        let new = vec![make_llm_line("新台词", Some("Bob"), None)];
 
         let result = merge_script_lines(&old, &new, &chars);
         assert_eq!(result.len(), 1);
@@ -404,7 +423,7 @@ mod tests {
             make_old_line("line-1", "保留的行", None),
             make_old_line("line-2", "删除的行", None),
         ];
-        let new = vec![make_llm_line("保留的行", None)];
+        let new = vec![make_llm_line("保留的行", None, None)];
 
         let result = merge_script_lines(&old, &new, &[]);
         assert_eq!(result.len(), 1);
@@ -415,7 +434,7 @@ mod tests {
     fn test_merge_position_match_uses_llm_character() {
         let old = vec![make_old_line("line-1", "旧文本", None)];
         let chars = vec![make_char("char-A", "Alice")];
-        let new = vec![make_llm_line("全新内容", Some("Alice"))];  // position match
+        let new = vec![make_llm_line("全新内容", Some("Alice"), None)];  // position match
 
         let result = merge_script_lines(&old, &new, &chars);
         assert_eq!(result.len(), 1);
@@ -429,7 +448,7 @@ mod tests {
     fn test_merge_position_match_preserves_old_character() {
         let old = vec![make_old_line("line-1", "旧文本", Some("char-A"))];
         let chars = vec![make_char("char-A", "Alice"), make_char("char-B", "Bob")];
-        let new = vec![make_llm_line("全新内容", Some("Bob"))];  // position match
+        let new = vec![make_llm_line("全新内容", Some("Bob"), Some("语气坚定，语速中等"))];  // position match
 
         let result = merge_script_lines(&old, &new, &chars);
         assert_eq!(result.len(), 1);
@@ -442,10 +461,10 @@ mod tests {
     fn test_merge_skips_empty_llm_lines() {
         let old: Vec<ScriptLine> = vec![];
         let new = vec![
-            make_llm_line("有效行", None),
-            make_llm_line("   ", None),
-            make_llm_line("", None),
-            make_llm_line("另一行", None),
+            make_llm_line("有效行", None, None),
+            make_llm_line("   ", None, None),
+            make_llm_line("", None, None),
+            make_llm_line("另一行", None, None),
         ];
 
         let result = merge_script_lines(&old, &new, &[]);

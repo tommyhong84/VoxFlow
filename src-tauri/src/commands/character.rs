@@ -70,3 +70,41 @@ pub fn list_characters(
     let db = db.lock().map_err(|e| AppError::Database(e.to_string()))?;
     db.list_characters(&project_id)
 }
+
+/// List all characters across all projects, grouped by project.
+#[tauri::command]
+pub fn list_all_project_characters(
+    db: tauri::State<'_, Mutex<Database>>,
+) -> Result<Vec<(String, Vec<Character>)>, AppError> {
+    let db = db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+    db.list_all_project_characters()
+}
+
+/// Import characters from one project to another.
+#[tauri::command]
+pub fn import_characters(
+    db: tauri::State<'_, Mutex<Database>>,
+    to_project_id: String,
+    character_ids: Vec<String>,
+) -> Result<Vec<Character>, AppError> {
+    let db = db.lock().map_err(|e| AppError::Database(e.to_string()))?;
+    let mut imported = Vec::new();
+
+    for char_id in &character_ids {
+        let source = db.get_character_by_id(char_id)?;
+        let new_id = uuid::Uuid::new_v4().to_string();
+        let character = crate::core::models::Character {
+            id: new_id,
+            project_id: to_project_id.clone(),
+            name: source.name.clone(),
+            tts_model: source.tts_model.clone(),
+            voice_name: source.voice_name.clone(),
+            speed: source.speed,
+            pitch: source.pitch,
+        };
+        db.insert_character(&character)?;
+        imported.push(character);
+    }
+
+    Ok(imported)
+}

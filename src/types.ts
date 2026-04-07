@@ -30,6 +30,7 @@ export interface ScriptLine {
     text: string;
     character_id: string | null;
     gap_after_ms: number;
+    instructions: string;
 }
 
 export interface AudioFragment {
