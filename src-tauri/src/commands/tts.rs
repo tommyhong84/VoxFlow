@@ -208,8 +208,10 @@ async fn call_dashscope_tts(
 
     // Non-streaming: response contains audio URL in output.audio.url
     if let Some(url) = resp_body["output"]["audio"]["url"].as_str() {
+        // OSS may return http:// URL; upgrade to https:// for proxy compatibility
+        let url = url.replacen("http://", "https://", 1);
         let audio_response = client
-            .get(url)
+            .get(&url)
             .send()
             .await
             .map_err(|e| AppError::TtsService(format!("下载百炼 TTS 音频失败: {}", e)))?;

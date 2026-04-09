@@ -8,7 +8,7 @@ import {
   Save,
   Sparkles,
 } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "../ui/button";
 import { Progress } from "../ui/progress";
@@ -54,11 +54,41 @@ export default function ScriptLines({
   onGenerateAllTts,
 }: ScriptLinesProps) {
   const { t } = useTranslation();
-  const { addLine, addSection, setAllInstructions } = useScriptStore();
+  const { addLine, addSection, setAllInstructions, reorderLines } = useScriptStore();
   const [batchInstructionsOpen, setBatchInstructionsOpen] = useState(false);
   const [batchInstructionsValue, setBatchInstructionsValue] = useState("");
   const [outlineBtnBouncing, setOutlineBtnBouncing] = useState(false);
   const outlineBtnAnimated = useRef(false);
+
+  // Drag state for flat line list
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+
+  const handleDragStart = useCallback((lineId: string) => {
+    setDraggingId(lineId);
+    setDropTargetId(null);
+  }, []);
+
+  const handleDragMove = useCallback((clientX: number, clientY: number) => {
+    if (!draggingId) return;
+    const el = document.elementFromPoint(clientX, clientY);
+    const card = el?.closest('[data-line-id]');
+    const targetId = card?.getAttribute('data-line-id') ?? null;
+    setDropTargetId(prev => prev !== targetId ? targetId : prev);
+  }, [draggingId]);
+
+  const handleDragEnd = useCallback(() => {
+    if (draggingId && dropTargetId && draggingId !== dropTargetId) {
+      const allLines = useScriptStore.getState().lines;
+      const fromIdx = allLines.findIndex((l) => l.id === draggingId);
+      const toIdx = allLines.findIndex((l) => l.id === dropTargetId);
+      if (fromIdx !== -1 && toIdx !== -1) {
+        reorderLines(fromIdx, toIdx);
+      }
+    }
+    setDraggingId(null);
+    setDropTargetId(null);
+  }, [draggingId, dropTargetId, reorderLines]);
 
   // Trigger bounce animation on first mount when outline button is visible
   useEffect(() => {
@@ -256,7 +286,16 @@ export default function ScriptLines({
           {unassignedLines.length > 0 && (
             <div className="space-y-2">
               {unassignedLines.map((line, index) => (
-                <ScriptLineComponent key={line.id} line={line} index={index} />
+                <ScriptLineComponent
+                  key={line.id}
+                  line={line}
+                  index={index}
+                  isDragging={draggingId === line.id}
+                  isDropTarget={dropTargetId === line.id}
+                  onDragStart={handleDragStart}
+                  onDragMove={handleDragMove}
+                  onDragEnd={handleDragEnd}
+                />
               ))}
             </div>
           )}
@@ -282,7 +321,16 @@ export default function ScriptLines({
           <p className="text-center text-muted-foreground py-8">{emptyHint}</p>
         )}
         {lines.map((line, index) => (
-          <ScriptLineComponent key={line.id} line={line} index={index} />
+          <ScriptLineComponent
+            key={line.id}
+            line={line}
+            index={index}
+            isDragging={draggingId === line.id}
+            isDropTarget={dropTargetId === line.id}
+            onDragStart={handleDragStart}
+            onDragMove={handleDragMove}
+            onDragEnd={handleDragEnd}
+          />
         ))}
         <Button
           variant="outline"

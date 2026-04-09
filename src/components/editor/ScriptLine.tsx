@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { GripVertical, Trash2, Volume2, Loader2, AlertCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useScriptStore } from '../../store/scriptStore';
@@ -20,14 +20,32 @@ import {
 } from '../ui/select';
 import type { ScriptLine, AudioFragment } from '../../types';
 
+/* ---- no module-level drag state, all state lifted to parent ---- */
+
 interface ScriptLineProps {
     line: ScriptLine;
     index: number;
+    totalLines?: number;
+    isDragging?: boolean;
+    isDropTarget?: boolean;
+    /** Called when pointer is down on the grip (starts drag) */
+    onDragStart?: (lineId: string, pointerId: number) => void;
+    /** Called when pointer moves during drag (to find drop target) */
+    onDragMove?: (clientX: number, clientY: number) => void;
+    /** Called when pointer is released (completes drag) */
+    onDragEnd?: () => void;
 }
 
-export default function ScriptLineComponent({ line, index }: ScriptLineProps) {
+export default function ScriptLineComponent({
+    line, index,
+    isDragging = false,
+    isDropTarget = false,
+    onDragStart,
+    onDragMove,
+    onDragEnd,
+}: ScriptLineProps) {
     const { t } = useTranslation();
-    const { updateLine, assignCharacter, deleteLine, reorderLines, setGap, setInstructions } = useScriptStore();
+    const { updateLine, assignCharacter, deleteLine, setGap, setInstructions } = useScriptStore();
     const { characters } = useCharacterStore();
     const currentProject = useProjectStore((s) => s.currentProject);
     const [generating, setGenerating] = useState(false);
@@ -35,6 +53,14 @@ export default function ScriptLineComponent({ line, index }: ScriptLineProps) {
     const [audioFragment, setAudioFragment] = useState<AudioFragment | null>(
         currentProject?.audio_fragments.find((a) => a.line_id === line.id) ?? null,
     );
+
+    // Prevent text selection globally while any card is being dragged
+    useEffect(() => {
+        if (!isDragging) return;
+        const handler = (e: Event) => e.preventDefault();
+        document.addEventListener('selectstart', handler);
+        return () => document.removeEventListener('selectstart', handler);
+    }, [isDragging]);
 
     // Sync local audioFragment with project store (e.g. after batch TTS)
     useEffect(() => {
@@ -92,41 +118,42 @@ export default function ScriptLineComponent({ line, index }: ScriptLineProps) {
         }
     };
 
-    const handleDragStart = (e: React.DragEvent) => {
-        e.dataTransfer.setData('text/plain', String(index));
-        e.dataTransfer.effectAllowed = 'move';
-    };
+    /* ---- Pointer drag on grip handle ---- */
+    const handlePointerDown = useCallback((e: React.PointerEvent) => {
+        if (e.button !== 0 || !onDragStart) return;
+        (e.target as Element).setPointerCapture(e.pointerId);
+        onDragStart(line.id, e.pointerId);
+    }, [line.id, onDragStart]);
 
-    const handleDragOver = (e: React.DragEvent) => {
-        // Only accept line drags, ignore section drags
-        if (e.dataTransfer.getData('section-index') !== '') return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-    };
+    const handlePointerMove = useCallback((e: React.PointerEvent) => {
+        onDragMove?.(e.clientX, e.clientY);
+    }, [onDragMove]);
 
-    const handleDrop = (e: React.DragEvent) => {
-        // Ignore section drags
-        if (e.dataTransfer.getData('section-index') !== '') return;
-        e.preventDefault();
-        const fromIndex = parseInt(e.dataTransfer.getData('text/plain'), 10);
-        if (!isNaN(fromIndex) && fromIndex !== index) {
-            reorderLines(fromIndex, index);
-        }
-    };
+    const handlePointerUp = useCallback(() => {
+        onDragEnd?.();
+    }, [onDragEnd]);
 
     const characterName = characters.find((c) => c.id === line.character_id)?.name;
     const UNASSIGNED = '__unassigned__';
 
     return (
         <Card
-            className="flex-row items-start gap-2 p-3 group"
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
+            data-line-id={line.id}
+            className={`flex-row items-start gap-2 p-3 group transition-all duration-150 ${
+                isDragging ? 'opacity-40' : ''
+            } ${
+                isDropTarget
+                    ? 'border-2 border-primary/70 bg-primary/5 ring-2 ring-primary/20'
+                    : 'border border-transparent'
+            }`}
+            style={isDragging ? { userSelect: 'none', WebkitUserSelect: 'none' } : undefined}
         >
+            {/* Drag handle: only this area initiates drag, text area remains fully selectable */}
             <div
-                className="cursor-grab select-none pt-2 text-muted-foreground hover:text-foreground"
-                draggable
-                onDragStart={handleDragStart}
+                className="cursor-grab select-none pt-2 text-muted-foreground hover:text-foreground active:cursor-grabbing touch-none"
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
             >
                 <GripVertical className="h-4 w-4" />
             </div>
