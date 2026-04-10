@@ -157,3 +157,11 @@
 .dark input[type="number"]::-webkit-outer-spin-button {
   filter: invert(1);
 }
+
+/* Auto-growing textarea using CSS field-sizing (modern browsers) */
+.auto-grow-textarea {
+  @apply w-full rounded-lg border border-input bg-transparent px-3 py-2 text-sm focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none overflow-hidden dark:bg-input/30;
+  field-sizing: content;
+  min-height: 40px;
+  resize: none;
+}

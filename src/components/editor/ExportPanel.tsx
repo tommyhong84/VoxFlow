@@ -128,7 +128,7 @@ export default function ExportPanel() {
     };
 
     return (
-        <div className="mx-auto max-w-3xl px-6 py-8 space-y-6">
+        <div className="px-6 py-8 space-y-6">
             <h2 className="text-xl font-bold">{t('export.title')}</h2>
 
             {missingLines.length > 0 && (

@@ -352,12 +352,12 @@ where
 
     // Step 4: collect audio deltas (audio arrives as base64 in text frames)
     let mut audio = Vec::<u8>::new();
-    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(120);
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(600);
 
     loop {
         let msg = tokio::time::timeout_at(deadline, ws.next()).await;
         match msg {
-            Err(_) => return Err(AppError::TtsService("WS task timed out (120s)".into())),
+            Err(_) => return Err(AppError::TtsService("WS task timed out (600s)".into())),
             Ok(None) => return Err(AppError::TtsService("WS closed unexpectedly".into())),
             Ok(Some(Err(e))) => return Err(AppError::TtsService(format!("WS error: {}", e))),
             Ok(Some(Ok(Message::Text(t)))) => {
@@ -811,7 +811,7 @@ pub async fn generate_all_tts(
         info!("[TTS][batch] line={}, voice={}, model={}", line.id, line.vc.voice_name, model);
 
         let task_result = tokio::time::timeout(
-            std::time::Duration::from_secs(120),
+            std::time::Duration::from_secs(600),
             batch_tts_one(&line.text, &line.vc, instr, &model, &api_key),
         ).await;
 

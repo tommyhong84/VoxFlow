@@ -240,7 +240,7 @@ export default function ScriptEditor() {
     const isAiMode = workflow === 'ai';
 
     return (
-        <div className="mx-auto max-w-4xl px-6 py-4 space-y-4 relative">
+        <div className="px-6 py-4 space-y-4 relative">
             {/* Batch TTS blocking overlay */}
             {isBatchTtsRunning && (
                 <div className="fixed z-50 flex items-center justify-center bg-background/60 backdrop-blur-sm pointer-events-auto" style={{ top: 0, right: 0, bottom: 0, left: 0, width: '100vw', height: '100vh' }}>

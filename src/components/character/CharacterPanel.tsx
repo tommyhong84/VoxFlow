@@ -186,7 +186,7 @@ export default function CharacterPanel() {
     );
 
     return (
-        <div className="mx-auto max-w-3xl px-6 py-8">
+        <div className="px-6 py-8">
             <div className="flex items-center justify-between mb-6">
                 <h2 className="text-xl font-bold">{t('character.title')}</h2>
                 <div className="flex gap-2">

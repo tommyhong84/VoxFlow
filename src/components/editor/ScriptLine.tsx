@@ -164,8 +164,9 @@ export default function ScriptLineComponent({
             <span className="pt-2 text-xs text-muted-foreground w-6 text-right shrink-0">{index + 1}</span>
 
             <div className="flex-1 space-y-2">
+                {/* Auto-growing textarea using CSS field-sizing: content */}
                 <textarea
-                    className="w-full rounded-lg border border-input bg-transparent px-3 py-2 text-sm focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none resize-y min-h-[40px] dark:bg-input/30"
+                    className="auto-grow-textarea"
                     value={line.text}
                     onChange={(e) => updateLine(line.id, e.target.value)}
                     placeholder={t('editor.linePlaceholder')}
