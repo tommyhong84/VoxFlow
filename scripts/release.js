@@ -16,6 +16,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = resolve(__dirname, '..');
 const CONFIG_PATH = resolve(ROOT, 'src-tauri/tauri.conf.json');
+const PACKAGE_PATH = resolve(ROOT, 'package.json');
 
 function bumpVersion(version, type) {
     const [major, minor, patch] = version.split('.').map(Number);
@@ -39,9 +40,13 @@ const newVersion = bumpVersion(oldVersion, bumpType);
 config.version = newVersion;
 writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
 
+const pkg = JSON.parse(readFileSync(PACKAGE_PATH, 'utf-8'));
+pkg.version = newVersion;
+writeFileSync(PACKAGE_PATH, JSON.stringify(pkg, null, 2) + '\n');
+
 console.log(`Version bumped: ${oldVersion} → ${newVersion} (${bumpType})`);
 
-execSync(`git add ${CONFIG_PATH}`, { stdio: 'inherit' });
+execSync(`git add ${CONFIG_PATH} ${PACKAGE_PATH}`, { stdio: 'inherit' });
 execSync(`git commit -m "chore: bump version to v${newVersion}"`, { stdio: 'inherit' });
 
 execSync(`git tag -a v${newVersion} -m "Release v${newVersion}"`, { stdio: 'inherit' });
