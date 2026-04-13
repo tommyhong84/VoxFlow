@@ -114,6 +114,16 @@
     "mapAllCharsRequired": "Please assign or create all suggested characters",
     "finishCreatingChars": "Please finish creating characters: {{names}}"
   },
+  "tools": {
+    "label": "Skills",
+    "outline_analysis": "Outline Analysis",
+    "character_extraction": "Character Extraction",
+    "script_generation": "Script Generation",
+    "story_recall": "Story Recall",
+    "story_memory": "Story Memory",
+    "calling": "Running",
+    "results": "results"
+  },
   "character": {
     "title": "Characters",
     "create": "New Character",

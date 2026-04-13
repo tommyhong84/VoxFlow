@@ -392,7 +392,7 @@ where
     // Step 4: collect audio deltas (audio arrives as base64 in text frames)
     let mut audio = Vec::<u8>::new();
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(600);
-    let mut finished_sending = true; // session.finish already sent above
+    let finished_sending = true; // session.finish already sent above
     let mut idle_deadline: Option<tokio::time::Instant> = None;
 
     loop {

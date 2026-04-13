@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 
 use futures_util::StreamExt;
+use serde_json::json;
 use tauri::Emitter;
 
 use crate::core::agent::{
@@ -40,6 +41,12 @@ pub async fn analyze_outline(
     use serde_json::json;
 
     cancel_token.reset();
+
+    // Emit tool-call event so UI shows this as a Skill invocation
+    let _ = app.emit("agent-tool-call", &json!({
+        "tool": "outline_analysis",
+        "query": outline.chars().take(100).collect::<String>()
+    }));
 
     let url = format!("{}/chat/completions", api_endpoint.trim_end_matches('/'));
 
@@ -170,6 +177,12 @@ pub async fn analyze_outline(
         })
         .collect();
 
+    // Emit tool-result event
+    let _ = app.emit("agent-tool-result", &json!({
+        "tool": "outline_analysis",
+        "results_count": enriched_chars.len()
+    }));
+
     Ok(AgentPlan {
         chapters: plan.chapters,
         suggested_characters: enriched_chars,
@@ -251,6 +264,12 @@ pub async fn generate_script(
     use serde_json::json;
 
     cancel_token.reset();
+
+    // Emit tool-call event so UI shows this as a Skill invocation
+    let _ = app.emit("agent-tool-call", &json!({
+        "tool": "script_generation",
+        "query": outline.chars().take(100).collect::<String>()
+    }));
 
     let url = format!("{}/chat/completions", api_endpoint.trim_end_matches('/'));
 
@@ -459,6 +478,12 @@ pub async fn generate_script(
         e
     })?;
 
+    // Emit tool-result event
+    let _ = app.emit("agent-tool-result", &json!({
+        "tool": "script_generation",
+        "results_count": sections.len()
+    }));
+
     Ok(())
 }
 
@@ -606,6 +631,294 @@ pub fn load_script(
 ) -> Result<Vec<ScriptLine>, AppError> {
     let db = db.lock().map_err(|e| AppError::Database(e.to_string()))?;
     db.load_script(&project_id)
+}
+
+/// Tauri-specific event emitter — bridges AppHandle::emit to EventEmitter trait.
+struct TauriEmitter(tauri::AppHandle);
+
+impl crate::core::event_emitter::EventEmitter for TauriEmitter {
+    fn emit_json(&self, event: &str, payload: &serde_json::Value) {
+        let _ = self.0.emit(event, payload);
+    }
+}
+
+/// Run the full agent pipeline: the agent autonomously decides the workflow
+/// (analyze outline → extract characters → generate script → save).
+/// This replaces the manual two-phase flow with an agent-driven approach.
+#[tauri::command]
+pub async fn run_agent_pipeline(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, Mutex<Database>>,
+    cancel_token: tauri::State<'_, CancellationToken>,
+    project_id: String,
+    outline: String,
+    api_endpoint: String,
+    api_key: String,
+    model: String,
+    characters: Vec<Character>,
+    agent_plan: Option<AgentPlan>,
+    extra_instructions: Option<String>,
+    enable_thinking: bool,
+) -> Result<(), AppError> {
+    let config = crate::core::agent::AgentConfig {
+        api_endpoint,
+        api_key,
+        model,
+        enable_thinking,
+        project_id: project_id.clone(),
+    };
+
+    let emitter = TauriEmitter(app);
+
+    crate::core::agent::run_agent_pipeline(
+        &emitter,
+        &cancel_token,
+        &db,
+        &config,
+        &outline,
+        characters,
+        agent_plan.as_ref(),
+        extra_instructions.as_deref(),
+    )
+    .await
+}
+
+/// Phase 1: Analyze outline and return a plan for user review.
+/// Does NOT generate script — stops after analysis for user confirmation.
+#[tauri::command]
+pub async fn run_analysis_step(
+    app: tauri::AppHandle,
+    cancel_token: tauri::State<'_, CancellationToken>,
+    outline: String,
+    api_endpoint: String,
+    api_key: String,
+    model: String,
+    characters: Vec<Character>,
+    enable_thinking: bool,
+) -> Result<AgentPlan, AppError> {
+    let config = crate::core::agent::AgentConfig {
+        api_endpoint,
+        api_key,
+        model,
+        enable_thinking,
+        project_id: String::new(), // Not used in analysis step
+    };
+
+    let emitter = TauriEmitter(app);
+
+    crate::core::agent::run_analysis_step(
+        &emitter,
+        &cancel_token,
+        &config,
+        &outline,
+        &characters,
+    )
+    .await
+}
+
+/// Phase 2: Generate script from a confirmed plan.
+/// Takes an optional plan (user may have modified it) and extra instructions.
+#[tauri::command]
+pub async fn run_generation_step(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, Mutex<Database>>,
+    cancel_token: tauri::State<'_, CancellationToken>,
+    project_id: String,
+    outline: String,
+    api_endpoint: String,
+    api_key: String,
+    model: String,
+    characters: Vec<Character>,
+    plan: Option<AgentPlan>,
+    extra_instructions: Option<String>,
+    enable_thinking: bool,
+) -> Result<(), AppError> {
+    let config = crate::core::agent::AgentConfig {
+        api_endpoint,
+        api_key,
+        model,
+        enable_thinking,
+        project_id: project_id.clone(),
+    };
+
+    let emitter = TauriEmitter(app);
+
+    crate::core::agent::run_generation_step(
+        &emitter,
+        &cancel_token,
+        &db,
+        &config,
+        &outline,
+        &characters,
+        plan.as_ref(),
+        extra_instructions.as_deref(),
+    )
+    .await
+}
+
+/// Revise specific sections of an existing script with new instructions.
+#[tauri::command]
+pub async fn run_revision_step(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, Mutex<Database>>,
+    cancel_token: tauri::State<'_, CancellationToken>,
+    project_id: String,
+    outline: String,
+    api_endpoint: String,
+    api_key: String,
+    model: String,
+    characters: Vec<Character>,
+    instructions: String,
+    section_indices: Option<Vec<usize>>,
+    plan: Option<AgentPlan>,
+    enable_thinking: bool,
+) -> Result<(), AppError> {
+    let revision = crate::core::agent::RevisionRequest {
+        instructions,
+        section_indices,
+    };
+
+    let config = crate::core::agent::AgentConfig {
+        api_endpoint,
+        api_key,
+        model,
+        enable_thinking,
+        project_id: project_id.clone(),
+    };
+
+    let emitter = TauriEmitter(app);
+
+    crate::core::agent::run_revision_step(
+        &emitter,
+        &cancel_token,
+        &db,
+        &config,
+        &outline,
+        &characters,
+        &revision,
+        plan.as_ref(),
+    )
+    .await
+}
+
+/// Semantic search over the story knowledge base.
+#[tauri::command]
+pub async fn story_recall(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, Mutex<Database>>,
+    project_id: String,
+    query: String,
+    api_endpoint: String,
+    api_key: String,
+    model: String,
+    kb_type: Option<String>,
+    top_k: Option<usize>,
+    _enable_thinking: bool,
+) -> Result<Vec<crate::core::vector_store::StoryRecallResult>, AppError> {
+    let args = crate::core::agent::tools::story_recall::StoryRecallArgs {
+        query,
+        kb_type,
+        top_k: top_k.unwrap_or(5),
+    };
+
+    let emitter = TauriEmitter(app);
+
+    let resp = crate::core::agent::tools::story_recall::do_story_recall(
+        &emitter,
+        &db,
+        &project_id,
+        &api_endpoint,
+        &api_key,
+        &model,
+        &args,
+    ).await?;
+
+    Ok(resp.results)
+}
+
+/// Build the knowledge base from existing script content.
+#[tauri::command]
+pub async fn build_story_kb(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, Mutex<Database>>,
+    project_id: String,
+    api_endpoint: String,
+    api_key: String,
+    model: String,
+) -> Result<usize, AppError> {
+    use crate::core::event_emitter::EventEmitter;
+    use crate::core::models::StoryKnowledgeItem;
+    use crate::core::vector_store::fetch_embedding;
+
+    let emitter = TauriEmitter(app);
+
+    // Load existing script
+    let (sections, lines) = {
+        let db_lock = db.lock().map_err(|e| {
+            AppError::LlmService(format!("Database lock poisoned: {}", e))
+        })?;
+        db_lock.load_script_with_sections(&project_id).map_err(|e| {
+            AppError::LlmService(format!("Failed to load script: {}", e))
+        })?
+    };
+
+    // Clear existing KB for this project
+    {
+        let db_lock = db.lock().map_err(|e| {
+            AppError::LlmService(format!("Database lock poisoned: {}", e))
+        })?;
+        db_lock.delete_all_story_kb(&project_id).map_err(|e| {
+            AppError::LlmService(format!("Failed to clear KB: {}", e))
+        })?;
+    }
+
+    // Index each section as a chunk
+    let mut count = 0;
+    for section in &sections {
+        let section_lines: Vec<&crate::core::models::ScriptLine> =
+            lines.iter().filter(|l| l.section_id.as_deref() == Some(&section.id)).collect();
+
+        if section_lines.is_empty() { continue; }
+
+        let text = section_lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+
+        // Fetch embedding
+        let embedding_vec = fetch_embedding(&api_endpoint, &api_key, &model, &text).await?;
+        let embedding_json = serde_json::to_string(&embedding_vec)
+            .map_err(|e| AppError::LlmService(format!("Failed to serialize embedding: {}", e)))?;
+
+        let item = StoryKnowledgeItem {
+            id: uuid::Uuid::new_v4().to_string(),
+            project_id: project_id.clone(),
+            text: format!("[{}] {}", section.title, text),
+            embedding: embedding_json,
+            kb_type: "plot".to_string(),
+            metadata: serde_json::to_string(&json!({
+                "section_id": section.id,
+                "section_title": section.title,
+                "line_count": section_lines.len()
+            })).unwrap_or_default(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        {
+            let db_lock = db.lock().map_err(|e| {
+                AppError::LlmService(format!("Database lock poisoned: {}", e))
+            })?;
+            db_lock.insert_story_kb(&item).map_err(|e| {
+                AppError::LlmService(format!("Failed to index section: {}", e))
+            })?;
+        }
+
+        emitter.emit_json("agent-kb-indexed", &json!({
+            "section": section.title,
+            "lines": section_lines.len()
+        }));
+
+        count += 1;
+    }
+
+    Ok(count)
 }
 
 #[cfg(test)]

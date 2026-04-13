@@ -114,6 +114,16 @@
     "mapAllCharsRequired": "请为所有角色指定已有角色或创建新角色",
     "finishCreatingChars": "请先完成创建角色: {{names}}"
   },
+  "tools": {
+    "label": "技能",
+    "outline_analysis": "大纲分析",
+    "character_extraction": "角色提取",
+    "script_generation": "脚本生成",
+    "story_recall": "剧情回顾",
+    "story_memory": "记忆存取",
+    "calling": "执行中",
+    "results": "条结果"
+  },
   "character": {
     "title": "角色管理",
     "create": "新建角色",

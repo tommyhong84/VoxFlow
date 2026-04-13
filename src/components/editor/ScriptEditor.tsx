@@ -10,12 +10,13 @@ import PlanCard from './PlanCard';
 import ScriptLines from './ScriptLines';
 import StreamingCard from './StreamingCard';
 import ThinkingPanel from './ThinkingPanel';
+import ToolCallList from './ToolCallList';
 import ConfirmDialog from '../ui/confirm-dialog';
 
 export default function ScriptEditor() {
     const { t } = useTranslation();
     const {
-        lines, sections, isGenerating, isAnalyzing, isDirty, streamingText, thinkingText,
+        lines, sections, isGenerating, isAnalyzing, isDirty, streamingText, thinkingText, toolCalls,
         enableThinking, setEnableThinking,
         agentPlan, workflow, setWorkflow, analyzeOutline, setAgentPlan, generateScript,
         cancelLlm, saveScript, generateAllTts, regenerateAllTts,
@@ -302,6 +303,11 @@ export default function ScriptEditor() {
                     thinkingText={thinkingText}
                     isThinking={isAnalyzing || isGenerating}
                 />
+            )}
+
+            {/* Tool calls - shown during generation when tools are invoked */}
+            {toolCalls.length > 0 && (
+                <ToolCallList entries={toolCalls} />
             )}
 
             {/* Plan card - AI mode only */}

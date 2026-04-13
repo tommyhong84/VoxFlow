@@ -3,7 +3,7 @@ use std::path::Path;
 use rusqlite::Connection;
 
 use super::error::AppError;
-use super::models::{AudioFragment, Character, Project, ProjectDetail, ScriptLine, ScriptSection, UserSettings};
+use super::models::{AudioFragment, Character, Project, ProjectDetail, ScriptLine, ScriptSection, StoryKnowledgeItem, UserSettings};
 
 pub struct Database {
     conn: Connection,
@@ -115,6 +115,22 @@ impl Database {
                     section_order INTEGER NOT NULL
                 );
                 ALTER TABLE script_lines ADD COLUMN section_id TEXT REFERENCES script_sections(id) ON DELETE SET NULL;
+                ",
+            ),
+            (
+                5,
+                "
+                CREATE TABLE IF NOT EXISTS story_kb (
+                    id          TEXT PRIMARY KEY,
+                    project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    text        TEXT NOT NULL,
+                    embedding   TEXT NOT NULL,
+                    kb_type     TEXT NOT NULL DEFAULT 'plot',
+                    metadata    TEXT NOT NULL DEFAULT '{}',
+                    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_story_kb_project ON story_kb(project_id);
+                CREATE INDEX IF NOT EXISTS idx_story_kb_type ON story_kb(kb_type);
                 ",
             ),
         ];
@@ -706,6 +722,169 @@ impl Database {
             .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
     }
+
+    // ============================================================
+    // CLI query helpers
+    // ============================================================
+
+    /// List all projects with their line counts (for CLI).
+    pub fn list_project_stats(&self) -> Result<Vec<(String, i32)>, AppError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT project_id, COUNT(*) as line_count FROM script_lines GROUP BY project_id ORDER BY project_id"
+        ).map_err(|e| AppError::Database(e.to_string()))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+        }).map_err(|e| AppError::Database(e.to_string()))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Database(e.to_string()))
+    }
+
+    /// Load all lines for a project, optionally with character/section info.
+    pub fn load_script_lines(&self, project_id: &str) -> Result<Vec<ScriptLineWithMeta>, AppError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT sl.id, sl.project_id, sl.line_order, sl.text, sl.character_id, sl.gap_after_ms, sl.instructions, sl.section_id, \
+             c.name as character_name, ss.title as section_title \
+             FROM script_lines sl \
+             LEFT JOIN characters c ON sl.character_id = c.id \
+             LEFT JOIN script_sections ss ON sl.section_id = ss.id \
+             WHERE sl.project_id = ?1 \
+             ORDER BY sl.line_order"
+        ).map_err(|e| AppError::Database(e.to_string()))?;
+        let rows = stmt.query_map(rusqlite::params![project_id], |row| {
+            Ok(ScriptLineWithMeta {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                line_order: row.get(2)?,
+                text: row.get(3)?,
+                character_id: row.get(4)?,
+                gap_after_ms: row.get(5)?,
+                instructions: row.get(6)?,
+                section_id: row.get(7)?,
+                character_name: row.get(8)?,
+                section_title: row.get(9)?,
+            })
+        }).map_err(|e| AppError::Database(e.to_string()))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Database(e.to_string()))
+    }
+
+    /// Load all characters for a project.
+    pub fn load_characters(&self, project_id: &str) -> Result<Vec<Character>, AppError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, project_id, voice_name, tts_model, speed, pitch FROM characters WHERE project_id = ?1 ORDER BY name"
+        ).map_err(|e| AppError::Database(e.to_string()))?;
+        let rows = stmt.query_map(rusqlite::params![project_id], |row| {
+            Ok(Character {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                project_id: row.get(2)?,
+                voice_name: row.get(3)?,
+                tts_model: row.get(4)?,
+                speed: row.get(5).unwrap_or(1.0),
+                pitch: row.get(6).unwrap_or(1.0),
+            })
+        }).map_err(|e| AppError::Database(e.to_string()))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Database(e.to_string()))
+    }
+
+    // ---- Story Knowledge Base (vector search) ----
+
+    /// Insert a knowledge item into the story vector DB.
+    pub fn insert_story_kb(&self, item: &StoryKnowledgeItem) -> Result<(), AppError> {
+        self.conn.execute(
+            "INSERT INTO story_kb (id, project_id, text, embedding, kb_type, metadata) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![item.id, item.project_id, item.text, item.embedding, item.kb_type, item.metadata],
+        ).map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Delete a knowledge item.
+    pub fn delete_story_kb(&self, id: &str) -> Result<(), AppError> {
+        self.conn.execute(
+            "DELETE FROM story_kb WHERE id = ?1",
+            rusqlite::params![id],
+        ).map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// List all knowledge items for a project.
+    pub fn list_story_kb(&self, project_id: &str, kb_type: Option<&str>) -> Result<Vec<StoryKnowledgeItem>, AppError> {
+        let mut items = Vec::new();
+
+        match kb_type {
+            Some(t) => {
+                let mut stmt = self.conn.prepare_cached(
+                    "SELECT id, project_id, text, embedding, kb_type, metadata, created_at FROM story_kb WHERE project_id = ?1 AND kb_type = ?2 ORDER BY created_at"
+                ).map_err(|e| AppError::Database(e.to_string()))?;
+                let mut rows = stmt.query(rusqlite::params![project_id, t])
+                    .map_err(|e| AppError::Database(e.to_string()))?;
+                while let Some(row) = rows.next().map_err(|e| AppError::Database(e.to_string()))? {
+                    items.push(StoryKnowledgeItem {
+                        id: row.get(0).map_err(|e| AppError::Database(e.to_string()))?,
+                        project_id: row.get(1).map_err(|e| AppError::Database(e.to_string()))?,
+                        text: row.get(2).map_err(|e| AppError::Database(e.to_string()))?,
+                        embedding: row.get(3).map_err(|e| AppError::Database(e.to_string()))?,
+                        kb_type: row.get(4).map_err(|e| AppError::Database(e.to_string()))?,
+                        metadata: row.get(5).map_err(|e| AppError::Database(e.to_string()))?,
+                        created_at: row.get(6).map_err(|e| AppError::Database(e.to_string()))?,
+                    });
+                }
+            }
+            None => {
+                let mut stmt = self.conn.prepare_cached(
+                    "SELECT id, project_id, text, embedding, kb_type, metadata, created_at FROM story_kb WHERE project_id = ?1 ORDER BY created_at"
+                ).map_err(|e| AppError::Database(e.to_string()))?;
+                let mut rows = stmt.query(rusqlite::params![project_id])
+                    .map_err(|e| AppError::Database(e.to_string()))?;
+                while let Some(row) = rows.next().map_err(|e| AppError::Database(e.to_string()))? {
+                    items.push(StoryKnowledgeItem {
+                        id: row.get(0).map_err(|e| AppError::Database(e.to_string()))?,
+                        project_id: row.get(1).map_err(|e| AppError::Database(e.to_string()))?,
+                        text: row.get(2).map_err(|e| AppError::Database(e.to_string()))?,
+                        embedding: row.get(3).map_err(|e| AppError::Database(e.to_string()))?,
+                        kb_type: row.get(4).map_err(|e| AppError::Database(e.to_string()))?,
+                        metadata: row.get(5).map_err(|e| AppError::Database(e.to_string()))?,
+                        created_at: row.get(6).map_err(|e| AppError::Database(e.to_string()))?,
+                    });
+                }
+            }
+        }
+
+        Ok(items)
+    }
+
+    /// Bulk delete all story_kb items for a project.
+    pub fn delete_all_story_kb(&self, project_id: &str) -> Result<(), AppError> {
+        self.conn.execute(
+            "DELETE FROM story_kb WHERE project_id = ?1",
+            rusqlite::params![project_id],
+        ).map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Load script sections and lines together (for KB indexing).
+    pub fn load_script_with_sections(&self, project_id: &str) -> Result<(Vec<ScriptSection>, Vec<ScriptLine>), AppError> {
+        let sections = self.list_sections(project_id)?;
+        let lines = self.load_script(project_id)?;
+        Ok((sections, lines))
+    }
+}
+
+/// A script line with resolved character name and section title (for export).
+#[derive(Debug, Clone)]
+pub struct ScriptLineWithMeta {
+    pub id: String,
+    pub project_id: String,
+    pub line_order: i32,
+    pub text: String,
+    pub character_id: Option<String>,
+    pub gap_after_ms: i32,
+    pub instructions: String,
+    pub section_id: Option<String>,
+    pub character_name: Option<String>,
+    pub section_title: Option<String>,
 }
 
 

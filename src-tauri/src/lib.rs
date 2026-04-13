@@ -1,5 +1,5 @@
 mod commands;
-mod core;
+pub mod core;
 
 use std::sync::Mutex;
 
@@ -49,6 +49,12 @@ pub fn run() {
             commands::import_characters,
             commands::generate_script,
             commands::analyze_outline,
+            commands::run_agent_pipeline,
+            commands::run_analysis_step,
+            commands::run_generation_step,
+            commands::run_revision_step,
+            commands::story_recall,
+            commands::build_story_kb,
             commands::cancel_llm,
             commands::save_script,
             commands::load_script,

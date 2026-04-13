@@ -164,6 +164,185 @@ export async function cancelLlm(): Promise<void> {
     return ipcCall<void>('cancel_llm');
 }
 
+// ---- Agent Pipeline ----
+
+export async function runAgentPipeline(
+    projectId: string,
+    outline: string,
+    config: LlmConfig,
+    characters: Character[],
+    agentPlan?: AgentPlan | null,
+    extraInstructions?: string,
+    enableThinking: boolean = false,
+): Promise<void> {
+    return ipcCall<void>('run_agent_pipeline', {
+        projectId,
+        outline,
+        apiEndpoint: config.api_endpoint,
+        apiKey: config.api_key,
+        model: config.model,
+        characters,
+        agentPlan: agentPlan || undefined,
+        extraInstructions: extraInstructions || undefined,
+        enableThinking,
+    });
+}
+
+// ---- Step-based Agent Pipeline (Phase 1 → Confirm → Phase 2) ----
+
+export async function runAnalysisStep(
+    outline: string,
+    config: LlmConfig,
+    characters: Character[],
+    enableThinking: boolean = false,
+): Promise<AgentPlan> {
+    return ipcCall<AgentPlan>('run_analysis_step', {
+        outline,
+        apiEndpoint: config.api_endpoint,
+        apiKey: config.api_key,
+        model: config.model,
+        characters,
+        enableThinking,
+    });
+}
+
+export interface NewCharacterInput {
+    name: string;
+    voice_name: string;
+    tts_model: string;
+    speed: number;
+    pitch: number;
+}
+
+export async function runGenerationStep(
+    projectId: string,
+    outline: string,
+    config: LlmConfig,
+    characters: Character[],
+    plan?: AgentPlan | null,
+    extraInstructions?: string,
+    enableThinking: boolean = false,
+): Promise<void> {
+    return ipcCall<void>('run_generation_step', {
+        projectId,
+        outline,
+        apiEndpoint: config.api_endpoint,
+        apiKey: config.api_key,
+        model: config.model,
+        characters,
+        plan: plan || undefined,
+        extraInstructions: extraInstructions || undefined,
+        enableThinking,
+    });
+}
+
+export async function runRevisionStep(
+    projectId: string,
+    outline: string,
+    config: LlmConfig,
+    characters: Character[],
+    instructions: string,
+    sectionIndices?: number[],
+    plan?: AgentPlan | null,
+    enableThinking: boolean = false,
+): Promise<void> {
+    return ipcCall<void>('run_revision_step', {
+        projectId,
+        outline,
+        apiEndpoint: config.api_endpoint,
+        apiKey: config.api_key,
+        model: config.model,
+        characters,
+        instructions,
+        sectionIndices: sectionIndices || undefined,
+        plan: plan || undefined,
+        enableThinking,
+    });
+}
+
+// ---- Agent Pipeline Events ----
+
+export function onAgentPipelineStarted(callback: (data: { project_id: string; phase?: string; sections?: number[] }) => void): Promise<UnlistenFn> {
+    return listen<{ project_id: string; phase?: string; sections?: number[] }>('agent-pipeline-started', (event) => callback(event.payload));
+}
+
+export function onAgentStepComplete(callback: (data: { phase: string; plan?: AgentPlan; project_id: string }) => void): Promise<UnlistenFn> {
+    return listen<{ phase: string; plan?: AgentPlan; project_id: string }>('agent-step-complete', (event) => callback(event.payload));
+}
+
+export function onAgentSectionGenerated(callback: (data: { section_index: number; section_id: string; title: string; line_count: number; characters: string[] }) => void): Promise<UnlistenFn> {
+    return listen<{ section_index: number; section_id: string; title: string; line_count: number; characters: string[] }>('agent-section-generated', (event) => callback(event.payload));
+}
+
+export function onAgentValidation(callback: (data: { total_lines: number; total_sections: number; unmatched_characters: string[]; warnings: string[] }) => void): Promise<UnlistenFn> {
+    return listen<{ total_lines: number; total_sections: number; unmatched_characters: string[]; warnings: string[] }>('agent-validation', (event) => callback(event.payload));
+}
+
+export function onAgentTtsSuggestions(callback: (data: { suggestions: { character_name: string; suggested_speed: number; suggested_pitch: number; reason: string }[] }) => void): Promise<UnlistenFn> {
+    return listen<{ suggestions: { character_name: string; suggested_speed: number; suggested_pitch: number; reason: string }[] }>('agent-tts-suggestions', (event) => callback(event.payload));
+}
+
+export function onAgentRetry(callback: (data: { attempt: number; max_retries: number; reason: string }) => void): Promise<UnlistenFn> {
+    return listen<{ attempt: number; max_retries: number; reason: string }>('agent-retry', (event) => callback(event.payload));
+}
+
+// ---- Story Knowledge Base (Vector Search) ----
+
+export interface StoryRecallResult {
+    text: string;
+    kb_type: string;
+    score: number;
+    metadata: string;
+}
+
+export async function storyRecall(
+    projectId: string,
+    query: string,
+    apiEndpoint: string,
+    apiKey: string,
+    model: string,
+    kbType?: string,
+    topK?: number,
+    enableThinking: boolean = false,
+): Promise<StoryRecallResult[]> {
+    return ipcCall<StoryRecallResult[]>('story_recall', {
+        projectId,
+        query,
+        apiEndpoint,
+        apiKey,
+        model,
+        kbType: kbType || undefined,
+        topK: topK || undefined,
+        enableThinking,
+    });
+}
+
+export async function buildStoryKb(
+    projectId: string,
+    apiEndpoint: string,
+    apiKey: string,
+    model: string,
+): Promise<number> {
+    return ipcCall<number>('build_story_kb', {
+        projectId,
+        apiEndpoint,
+        apiKey,
+        model,
+    });
+}
+
+export function onAgentKbIndexed(callback: (data: { section: string; lines: number }) => void): Promise<UnlistenFn> {
+    return listen<{ section: string; lines: number }>('agent-kb-indexed', (event) => callback(event.payload));
+}
+
+export function onAgentToolCall(callback: (data: { tool: string; query?: string; action?: string; text?: string }) => void): Promise<UnlistenFn> {
+    return listen<{ tool: string; query?: string; action?: string; text?: string }>('agent-tool-call', (event) => callback(event.payload));
+}
+
+export function onAgentToolResult(callback: (data: { tool: string; results_count?: number; id?: string }) => void): Promise<UnlistenFn> {
+    return listen<{ tool: string; results_count?: number; id?: string }>('agent-tool-result', (event) => callback(event.payload));
+}
+
 // ---- Script Operations ----
 
 export async function saveScript(projectId: string, lines: ScriptLine[], sections: ScriptSection[]): Promise<void> {

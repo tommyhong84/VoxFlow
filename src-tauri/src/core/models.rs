@@ -125,3 +125,16 @@ pub struct LlmScriptLine {
     pub instructions: Option<String>,
     pub gap_ms: Option<u32>,
 }
+
+/// A knowledge entry in the story vector database.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoryKnowledgeItem {
+    pub id: String,
+    pub project_id: String,
+    pub text: String,
+    /// JSON array of f32 values representing the embedding vector.
+    pub embedding: String,
+    pub kb_type: String, // "plot", "character", "setting", "foreshadow"
+    pub metadata: String, // JSON string for extra context
+    pub created_at: String,
+}

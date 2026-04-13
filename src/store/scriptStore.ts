@@ -40,6 +40,39 @@ function queueThink(set: (u: Partial<ScriptStore>) => void, token: string) {
     }
 }
 
+function makeToolEntry(data: { tool: string; query?: string; action?: string; text?: string }): ToolCallEntry {
+    const args: Record<string, unknown> = {};
+    if (data.query) args.query = data.query;
+    if (data.action) args.action = data.action;
+    if (data.text) args.text = data.text;
+    return {
+        id: `${Date.now()}-${data.tool}`,
+        tool: data.tool,
+        args,
+        status: 'calling',
+        timestamp: Date.now(),
+    };
+}
+
+function markToolDone(calls: ToolCallEntry[], tool: string, result: string): ToolCallEntry[] {
+    for (let i = calls.length - 1; i >= 0; i--) {
+        if (calls[i].tool === tool && calls[i].status === 'calling') {
+            calls[i] = { ...calls[i], status: 'done', result };
+            break;
+        }
+    }
+    return calls;
+}
+
+export interface ToolCallEntry {
+    id: string;
+    tool: string;
+    args: Record<string, unknown>;
+    status: 'calling' | 'done' | 'error';
+    result?: string;
+    timestamp: number;
+}
+
 interface ScriptStore {
     lines: ScriptLine[];
     sections: ScriptSection[];
@@ -48,6 +81,7 @@ interface ScriptStore {
     isDirty: boolean;
     streamingText: string;
     thinkingText: string;
+    toolCalls: ToolCallEntry[];
     enableThinking: boolean;
     setEnableThinking: (v: boolean) => void;
     isBatchTtsRunning: boolean;
@@ -57,6 +91,7 @@ interface ScriptStore {
     setWorkflow: (mode: 'ai' | 'manual' | null) => void;
     analyzeOutline: (outline: string) => Promise<void>;
     generateScript: (outline: string, extraInstructions?: string, confirmedCharNames?: string[]) => Promise<void>;
+    runAgentPipeline: (outline: string, extraInstructions?: string) => Promise<void>;
     cancelLlm: () => Promise<void>;
     setAgentPlan: (plan: ipc.AgentPlan | null) => void;
     updateLine: (lineId: string, text: string) => void;
@@ -95,6 +130,7 @@ export const useScriptStore = create<ScriptStore>()(
             isDirty: false,
             streamingText: '',
             thinkingText: '',
+            toolCalls: [],
             enableThinking: true,
             isBatchTtsRunning: false,
             batchTtsProgress: null,
@@ -137,18 +173,26 @@ export const useScriptStore = create<ScriptStore>()(
                     queueThink(set, token);
                 });
 
+                const unlistenToolCall = await ipc.onAgentToolCall((data) => {
+                    set((prev) => ({ toolCalls: [...prev.toolCalls, makeToolEntry(data)] }));
+                });
+
+                const unlistenToolResult = await ipc.onAgentToolResult((data) => {
+                    set((prev) => ({ toolCalls: markToolDone([...prev.toolCalls], data.tool, `${data.results_count ?? '?'} results`) }));
+                });
+
                 const unlistenCancel = await ipc.onLlmCancel(() => {
                     flushText(set);
                     flushThink(set);
                     useToastStore.getState().addToast('editor.cancelAnalyzeToast', 'info');
-                    set({ isAnalyzing: false, streamingText: '', thinkingText: '' });
+                    set({ isAnalyzing: false, streamingText: '', thinkingText: '', toolCalls: [] });
                 });
 
                 const unlistenError = await ipc.onLlmError((_error) => {
                     flushText(set);
                     flushThink(set);
                     useToastStore.getState().addToast('editor.analyzeFailed');
-                    set({ isAnalyzing: false, streamingText: '', thinkingText: '' });
+                    set({ isAnalyzing: false, streamingText: '', thinkingText: '', toolCalls: [] });
                 });
 
                 try {
@@ -159,7 +203,7 @@ export const useScriptStore = create<ScriptStore>()(
                     }, characters, enableThinking);
                     flushText(set);
                     flushThink(set);
-                    set({ agentPlan: plan, isAnalyzing: false, streamingText: '', thinkingText: '' });
+                    set({ agentPlan: plan, isAnalyzing: false, streamingText: '', thinkingText: '', toolCalls: [] });
                 } catch (e) {
                     const errMsg = String(e);
                     if (!errMsg.includes('已取消')) {
@@ -167,10 +211,12 @@ export const useScriptStore = create<ScriptStore>()(
                     }
                     flushText(set);
                     flushThink(set);
-                    set({ isAnalyzing: false, streamingText: '', thinkingText: '' });
+                    set({ isAnalyzing: false, streamingText: '', thinkingText: '', toolCalls: [] });
                 } finally {
                     unlistenToken();
                     unlistenThinking();
+                    unlistenToolCall();
+                    unlistenToolResult();
                     unlistenCancel();
                     unlistenError();
                 }
@@ -203,7 +249,7 @@ export const useScriptStore = create<ScriptStore>()(
                 const oldLines = get().lines;
                 textBuf = '';
                 thinkBuf = '';
-                set({ isGenerating: true, streamingText: '', thinkingText: '' });
+                set({ isGenerating: true, streamingText: '', thinkingText: '', toolCalls: [] });
 
                 const unlistenToken = await ipc.onLlmToken((token) => {
                     queueText(set, token);
@@ -213,9 +259,17 @@ export const useScriptStore = create<ScriptStore>()(
                     queueThink(set, token);
                 });
 
+                const unlistenToolCall = await ipc.onAgentToolCall((data) => {
+                    set((prev) => ({ toolCalls: [...prev.toolCalls, makeToolEntry(data)] }));
+                });
+
+                const unlistenToolResult = await ipc.onAgentToolResult((data) => {
+                    set((prev) => ({ toolCalls: markToolDone([...prev.toolCalls], data.tool, `${data.results_count ?? '?'} results`) }));
+                });
+
                 const unlistenCancel = await ipc.onLlmCancel(() => {
                     useToastStore.getState().addToast('editor.cancelGenerate', 'info');
-                    set({ lines: oldLines, isGenerating: false, streamingText: '', thinkingText: '' });
+                    set({ lines: oldLines, isGenerating: false, streamingText: '', thinkingText: '', toolCalls: [] });
                 });
 
                 const unlistenComplete = await ipc.onLlmComplete(() => {
@@ -250,10 +304,93 @@ export const useScriptStore = create<ScriptStore>()(
                     }, characters, agentPlan, extraInstructions, enableThinking);
                 } catch (e) {
                     useToastStore.getState().addToast('editor.generateFailed');
-                    set({ lines: oldLines, isGenerating: false, streamingText: '', thinkingText: '' });
+                    set({ lines: oldLines, isGenerating: false, streamingText: '', thinkingText: '', toolCalls: [] });
                 } finally {
                     unlistenToken();
                     unlistenThinking();
+                    unlistenToolCall();
+                    unlistenToolResult();
+                    unlistenCancel();
+                    unlistenComplete();
+                    unlistenError();
+                }
+            },
+
+            runAgentPipeline: async (outline: string, extraInstructions?: string) => {
+                const { useSettingsStore } = await import('./settingsStore');
+                const project = useProjectStore.getState().currentProject;
+                if (!project) return;
+
+                const settings = useSettingsStore.getState();
+                const apiKey = await ipc.loadApiKey('dashscope');
+                const characters = useCharacterStore.getState().characters;
+                const enableThinking = settings.enableThinking;
+                const agentPlan = get().agentPlan;
+
+                const oldLines = get().lines;
+                textBuf = '';
+                thinkBuf = '';
+                set({ isGenerating: true, streamingText: '', thinkingText: '', toolCalls: [] });
+
+                const unlistenToken = await ipc.onLlmToken((token) => {
+                    queueText(set, token);
+                });
+
+                const unlistenThinking = await ipc.onLlmThinking((token) => {
+                    queueThink(set, token);
+                });
+
+                const unlistenToolCall = await ipc.onAgentToolCall((data) => {
+                    set((prev) => ({ toolCalls: [...prev.toolCalls, makeToolEntry(data)] }));
+                });
+
+                const unlistenToolResult = await ipc.onAgentToolResult((data) => {
+                    set((prev) => ({ toolCalls: markToolDone([...prev.toolCalls], data.tool, `${data.results_count ?? '?'} results`) }));
+                });
+
+                const unlistenCancel = await ipc.onLlmCancel(() => {
+                    useToastStore.getState().addToast('editor.cancelGenerate', 'info');
+                    set({ lines: oldLines, isGenerating: false, streamingText: '', thinkingText: '', toolCalls: [] });
+                });
+
+                const unlistenComplete = await ipc.onLlmComplete(() => {
+                    // Reload full project to get both lines and sections
+                    useProjectStore.getState().loadProject(project.project.id).then(() => {
+                        const updated = useProjectStore.getState().currentProject;
+                        if (updated) {
+                            set({
+                                lines: updated.script_lines,
+                                sections: updated.sections ?? [],
+                                isGenerating: false,
+                                streamingText: '',
+                                thinkingText: '',
+                                isDirty: false,
+                            });
+                        } else {
+                            set({ lines: [], sections: [], isGenerating: false, streamingText: '', thinkingText: '', isDirty: false });
+                        }
+                    });
+                });
+
+                const unlistenError = await ipc.onLlmError((_error) => {
+                    useToastStore.getState().addToast('editor.generateErrorRecovered');
+                    set({ lines: oldLines, isGenerating: false, streamingText: '', thinkingText: '', toolCalls: [] });
+                });
+
+                try {
+                    await ipc.runAgentPipeline(project.project.id, outline, {
+                        api_endpoint: settings.llmEndpoint,
+                        api_key: apiKey ?? '',
+                        model: settings.llmModel,
+                    }, characters, agentPlan, extraInstructions, enableThinking);
+                } catch (e) {
+                    useToastStore.getState().addToast('editor.generateFailed');
+                    set({ lines: oldLines, isGenerating: false, streamingText: '', thinkingText: '', toolCalls: [] });
+                } finally {
+                    unlistenToken();
+                    unlistenThinking();
+                    unlistenToolCall();
+                    unlistenToolResult();
                     unlistenCancel();
                     unlistenComplete();
                     unlistenError();
