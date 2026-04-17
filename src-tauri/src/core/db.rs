@@ -21,6 +21,31 @@ impl Database {
         Ok(Self { conn })
     }
 
+    /// Check whether a column already exists on a table via `PRAGMA table_info`.
+    fn has_column(&self, table: &str, column: &str) -> Result<bool, AppError> {
+        let sql = format!("PRAGMA table_info({})", table);
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let exists = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| AppError::Database(e.to_string()))?
+            .any(|name| name.map(|n| n == column).unwrap_or(false));
+        Ok(exists)
+    }
+
+    /// Add a column to a table only if it does not already exist.
+    fn add_column_if_not_exists(&self, table: &str, column: &str, col_def: &str) -> Result<(), AppError> {
+        if !self.has_column(table, column)? {
+            let sql = format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, col_def);
+            self.conn
+                .execute_batch(&sql)
+                .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Run schema migrations.
     /// Uses a `schema_migrations` table to track applied migrations, so upgrades
     /// never re-run old steps and users don't need to manually edit SQLite.
@@ -98,46 +123,7 @@ impl Database {
                 );
                 ",
             ),
-            (
-                2,
-                "ALTER TABLE projects ADD COLUMN outline TEXT NOT NULL DEFAULT '';",
-            ),
-            (
-                3,
-                "ALTER TABLE script_lines ADD COLUMN instructions TEXT NOT NULL DEFAULT '';",
-            ),
-            (
-                4,
-                "
-                CREATE TABLE IF NOT EXISTS script_sections (
-                    id            TEXT PRIMARY KEY,
-                    project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                    title         TEXT NOT NULL,
-                    section_order INTEGER NOT NULL
-                );
-                ALTER TABLE script_lines ADD COLUMN section_id TEXT REFERENCES script_sections(id) ON DELETE SET NULL;
-                ",
-            ),
-            (
-                5,
-                "
-                CREATE TABLE IF NOT EXISTS story_kb (
-                    id          TEXT PRIMARY KEY,
-                    project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                    text        TEXT NOT NULL,
-                    embedding   TEXT NOT NULL,
-                    kb_type     TEXT NOT NULL DEFAULT 'plot',
-                    metadata    TEXT NOT NULL DEFAULT '{}',
-                    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-                CREATE INDEX IF NOT EXISTS idx_story_kb_project ON story_kb(project_id);
-                CREATE INDEX IF NOT EXISTS idx_story_kb_type ON story_kb(kb_type);
-                ",
-            ),
-            (
-                6,
-                "ALTER TABLE audio_fragments ADD COLUMN source TEXT NOT NULL DEFAULT 'tts';",
-            ),
+            // Migration 2–6: see programmatic handling below
         ];
 
         for (version, sql) in migrations {
@@ -151,6 +137,69 @@ impl Database {
                     "Migration {} failed: {}",
                     version, e
                 )))?;
+
+            self.conn
+                .execute("INSERT INTO schema_migrations (version) VALUES (?1)", rusqlite::params![version])
+                .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+
+        // Programmatic migrations that require column-existence checks
+        // to avoid "duplicate column" errors on fresh installs where
+        // CREATE TABLE already includes these columns.
+
+        let alter_migrations: &[(i32, &str, &[(&str, &str, &str)])] = &[
+            // (version, extra_sql_before, &[(table, column, definition)])
+            (2, "", &[("projects", "outline", "TEXT NOT NULL DEFAULT ''")]),
+            (3, "", &[("script_lines", "instructions", "TEXT NOT NULL DEFAULT ''")]),
+            (
+                4,
+                "CREATE TABLE IF NOT EXISTS script_sections (
+                    id            TEXT PRIMARY KEY,
+                    project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    title         TEXT NOT NULL,
+                    section_order INTEGER NOT NULL
+                );",
+                &[("script_lines", "section_id", "TEXT REFERENCES script_sections(id) ON DELETE SET NULL")],
+            ),
+            (
+                5,
+                "CREATE TABLE IF NOT EXISTS story_kb (
+                    id          TEXT PRIMARY KEY,
+                    project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    text        TEXT NOT NULL,
+                    embedding   TEXT NOT NULL,
+                    kb_type     TEXT NOT NULL DEFAULT 'plot',
+                    metadata    TEXT NOT NULL DEFAULT '{}',
+                    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_story_kb_project ON story_kb(project_id);
+                CREATE INDEX IF NOT EXISTS idx_story_kb_type ON story_kb(kb_type);",
+                &[],
+            ),
+            (6, "", &[("audio_fragments", "source", "TEXT NOT NULL DEFAULT 'tts'")]),
+        ];
+
+        for (version, extra_sql, columns) in alter_migrations {
+            if *version <= current_version {
+                continue;
+            }
+
+            if !extra_sql.is_empty() {
+                self.conn
+                    .execute_batch(extra_sql)
+                    .map_err(|e| AppError::Database(format!(
+                        "Migration {} failed: {}",
+                        version, e
+                    )))?;
+            }
+
+            for (table, column, col_def) in *columns {
+                self.add_column_if_not_exists(table, column, col_def)
+                    .map_err(|e| AppError::Database(format!(
+                        "Migration {} failed adding {}.{}: {}",
+                        version, table, column, e
+                    )))?;
+            }
 
             self.conn
                 .execute("INSERT INTO schema_migrations (version) VALUES (?1)", rusqlite::params![version])
